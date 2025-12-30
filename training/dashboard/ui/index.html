@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gomoku Rift – Training Dashboard</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="header__title">Training Dashboard</div>
+      <div class="header__subtitle">Elo-gated self-play improvement</div>
+    </header>
+
+    <main class="layout">
+      <section class="card">
+        <div class="card__title">Orchestrate</div>
+        <div class="controls">
+          <label class="label">Preset</label>
+          <select id="presetSelect" class="select"></select>
+          <label class="label">Cycles</label>
+          <input id="cyclesInput" class="input" type="number" min="1" value="1" />
+          <button id="startBtn" class="btn">Start</button>
+          <button id="stopBtn" class="btn">Stop</button>
+          <span id="jobStatus" class="status">Idle</span>
+        </div>
+        <pre id="jobLogs" class="details"></pre>
+      </section>
+
+      <section class="card">
+        <div class="card__title">Runs</div>
+        <div class="controls">
+          <button id="refreshBtn" class="btn">Refresh</button>
+          <span id="status" class="status">Idle</span>
+        </div>
+        <div class="tableWrap">
+          <table class="table" id="runsTable">
+            <thead>
+              <tr>
+                <th>Run</th>
+                <th>Started</th>
+                <th>Promoted</th>
+                <th>Elo</th>
+                <th>CI</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card__title">Elo over time</div>
+        <canvas id="eloChart" width="900" height="280"></canvas>
+        <div class="note">Elo is candidate vs best at evaluation time. Promotion rule: CI low &gt; 0.</div>
+      </section>
+
+      <section class="card">
+        <div class="card__title">Selected run</div>
+        <pre id="runDetails" class="details">(select a run)</pre>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
+

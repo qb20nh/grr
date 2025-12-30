@@ -4,22 +4,72 @@
  */
 
 import { CONFIG } from './constants';
-import type { Board, Color, Move, SearchResult } from './types';
+import type { Board, Color, Move, SearchResult, ScoredMove, UndoInfo } from './types';
 import { getOpponent, moveToKey } from './utils';
 import { makeMove, unmakeMove, getWinnerAfterMove } from './board';
-import { evaluate, isQuietPosition } from './evaluate';
+import { evaluateSearch, isQuietPosition } from './evaluate';
 import { generateAllMoves, generateTacticalMoves } from './moveGen';
 import { orderMoves, updateKillerMoves, updateHistory, clearMoveOrdering, PVTable, isInterestingMove, getLMRReduction, getFutilityMargin } from './moveOrder';
 import { getTranspositionTable, TranspositionTable } from './transposition';
 import { hasCriticalThreat } from './threats';
 import { withTurn } from './zobrist';
 import { threatSpaceSearch } from './tss';
+import type { NnueWeights } from './nnue/weights';
+import { NnueState } from './nnue/evaluator';
 
 // Search statistics
 let nodesSearched = 0;
 let searchStartTime = 0;
 let searchTimeLimit = 0;
 let searchAborted = false;
+
+interface SearchContext {
+  board: Board;
+  nnue: NnueState | null;
+}
+
+function applyMove(ctx: SearchContext, move: Move, player: Color): UndoInfo {
+  const undo = makeMove(ctx.board, move, player);
+  ctx.nnue?.applyMove(move, player, undo);
+  return undo;
+}
+
+function revertMove(ctx: SearchContext, undo: UndoInfo, player: Color): void {
+  ctx.nnue?.unapplyMove(undo.move, player, undo);
+  unmakeMove(ctx.board, undo, player);
+}
+
+function rescoreTopMovesWithNnue(
+  ctx: SearchContext,
+  player: Color,
+  moves: ScoredMove[],
+  topK: number
+): ScoredMove[] {
+  if (!ctx.nnue) return moves;
+  const K = Math.min(Math.max(0, topK), moves.length);
+  if (K <= 1) return moves;
+
+  const opponent = getOpponent(player);
+  const rescored: { m: ScoredMove; order: number; idx: number }[] = [];
+
+  for (let i = 0; i < K; i++) {
+    const m = moves[i];
+    const undo = applyMove(ctx, m.move, player);
+    const childScore = evaluateSearch(ctx.board, opponent, ctx.nnue); // opponent-perspective
+    revertMove(ctx, undo, player);
+    // move value from current player perspective
+    rescored.push({ m, order: -childScore, idx: i });
+  }
+
+  rescored.sort((a, b) => {
+    const d = b.order - a.order;
+    if (d !== 0) return d;
+    // Stable-ish tie-breaker: preserve previous ordering within the rescored window.
+    return a.idx - b.idx;
+  });
+
+  return [...rescored.map(r => r.m), ...moves.slice(K)];
+}
 
 /**
  * Check if time limit has been exceeded
@@ -33,7 +83,7 @@ function isTimeUp(): boolean {
  * Quiescence Search - Search tactical positions to stability
  */
 function quiescence(
-  board: Board,
+  ctx: SearchContext,
   player: Color,
   alpha: number,
   beta: number,
@@ -47,7 +97,7 @@ function quiescence(
   }
   
   // Stand-pat evaluation
-  const standPat = evaluate(board, player);
+  const standPat = evaluateSearch(ctx.board, player, ctx.nnue);
   
   if (depth <= 0) {
     return standPat;
@@ -65,12 +115,12 @@ function quiescence(
   }
   
   // Check if position is quiet enough to stop
-  if (isQuietPosition(board, player)) {
+  if (isQuietPosition(ctx.board, player)) {
     return standPat;
   }
   
   // Generate only tactical moves
-  const tacticalMoves = generateTacticalMoves(board, player);
+  const tacticalMoves = generateTacticalMoves(ctx.board, player);
   
   for (const { move, score } of tacticalMoves) {
     // Delta pruning - skip moves that can't possibly improve alpha
@@ -78,9 +128,9 @@ function quiescence(
       continue;
     }
     
-    const undoInfo = makeMove(board, move, player);
-    const evalScore = -quiescence(board, getOpponent(player), -beta, -localAlpha, depth - 1);
-    unmakeMove(board, undoInfo, player);
+    const undoInfo = applyMove(ctx, move, player);
+    const evalScore = -quiescence(ctx, getOpponent(player), -beta, -localAlpha, depth - 1);
+    revertMove(ctx, undoInfo, player);
     
     if (searchAborted) return 0;
     
@@ -100,7 +150,7 @@ function quiescence(
  * Alpha-Beta Search with Principal Variation Search
  */
 function alphaBeta(
-  board: Board,
+  ctx: SearchContext,
   player: Color,
   depth: number,
   alpha: number,
@@ -119,7 +169,7 @@ function alphaBeta(
   }
   
   // Transposition table probe
-  const ttKey = withTurn(board.hash, player);
+  const ttKey = withTurn(ctx.board.hash, player);
   const [ttHit, ttScore, ttBestMove] = tt.tryGetScore(ttKey, depth, alpha, beta);
   if (ttHit) {
     return { completed: true, score: ttScore, move: ttBestMove };
@@ -127,13 +177,13 @@ function alphaBeta(
   
   // Depth limit - enter quiescence
   if (depth <= 0) {
-    const qScore = quiescence(board, player, alpha, beta, CONFIG.QUIESCENCE_DEPTH);
+    const qScore = quiescence(ctx, player, alpha, beta, CONFIG.QUIESCENCE_DEPTH);
     return { completed: !searchAborted, score: qScore, move: null };
   }
   
   // Generate and order moves
-  const underCriticalThreat = ply === 0 && hasCriticalThreat(board, getOpponent(player));
-  let moves = orderMoves(board, player, ply, ttBestMove);
+  const underCriticalThreat = ply === 0 && hasCriticalThreat(ctx.board, getOpponent(player));
+  let moves = orderMoves(ctx.board, player, ply, ttBestMove);
 
   // Progressive widening at root: start with a smaller set of top moves and expand with depth.
   if (ply === 0) {
@@ -142,10 +192,15 @@ function alphaBeta(
     const limit = Math.min(moves.length, base + perDepth * Math.max(0, depth - 1));
     moves = moves.slice(0, limit);
   }
+
+  // NNUE-assisted ordering at root: rescore the top-K moves with a cheap child NNUE eval.
+  if (ply === 0 && ctx.nnue && CONFIG.NNUE_ORDER_RESCORE_TOP_K > 0) {
+    moves = rescoreTopMovesWithNnue(ctx, player, moves, CONFIG.NNUE_ORDER_RESCORE_TOP_K);
+  }
   
   if (moves.length === 0) {
     // No legal moves (shouldn't happen in Gomoku)
-    return { completed: true, score: evaluate(board, player), move: null };
+    return { completed: true, score: evaluateSearch(ctx.board, player, ctx.nnue), move: null };
   }
   
   let bestMove: Move | null = null;
@@ -154,21 +209,21 @@ function alphaBeta(
   let searchedMoves = 0;
   
   for (const { move, score: moveScore } of moves) {
-    const undoInfo = makeMove(board, move, player);
+    const undoInfo = applyMove(ctx, move, player);
     
     let score: number;
 
     // Incremental terminal check based on the move we just made.
     // This replaces expensive full-board `hasWon` scans at every node.
-    const winner = getWinnerAfterMove(board, move, player);
+    const winner = getWinnerAfterMove(ctx.board, move, player);
     if (winner !== null) {
       // Use child-ply (ply + 1) so earlier wins are preferred.
       score = winner === player ? (CONFIG.WIN_SCORE - (ply + 1)) : (CONFIG.LOSS_SCORE + (ply + 1));
-      unmakeMove(board, undoInfo, player);
+      revertMove(ctx, undoInfo, player);
       searchedMoves++;
     } else {
       const isCapture = move.action === 'rift';
-      const givesCheck = isInterestingMove(board, move, player, moveScore);
+      const givesCheck = isInterestingMove(ctx.board, move, player, moveScore);
       // Threat extension: only at the frontier to avoid runaway depth in tactical lines.
       const extension = depth === 1 && givesCheck ? 1 : 0;
       const fullChildDepth = depth - 1 + extension;
@@ -179,7 +234,7 @@ function alphaBeta(
       if (!underCriticalThreat && depth <= 2 && searchedMoves >= 8 && !isCapture && !givesCheck) {
         const margin = getFutilityMargin(depth);
         if (moveScore + margin <= alpha) {
-          unmakeMove(board, undoInfo, player);
+          revertMove(ctx, undoInfo, player);
           searchedMoves++;
           continue;
         }
@@ -189,7 +244,7 @@ function alphaBeta(
       if (searchedMoves === 0) {
         // Full window search for first move (expected best move)
         const result = alphaBeta(
-          board, getOpponent(player), fullChildDepth,
+          ctx, getOpponent(player), fullChildDepth,
           -beta, -alpha, ply + 1, tt, pvTable, true
         );
         score = -result.score;
@@ -199,7 +254,7 @@ function alphaBeta(
 
         // Null window search for other moves
         let result = alphaBeta(
-          board, getOpponent(player), reducedDepth,
+          ctx, getOpponent(player), reducedDepth,
           -alpha - 1, -alpha, ply + 1, tt, pvTable, true
         );
         score = -result.score;
@@ -207,7 +262,7 @@ function alphaBeta(
         // If we reduced depth and the move looks promising, re-search at full depth.
         if (reduction > 0 && score > alpha && !searchAborted) {
           result = alphaBeta(
-            board, getOpponent(player), fullChildDepth,
+            ctx, getOpponent(player), fullChildDepth,
             -alpha - 1, -alpha, ply + 1, tt, pvTable, true
           );
           score = -result.score;
@@ -216,14 +271,14 @@ function alphaBeta(
         // Re-search with full window if failed high
         if (score > alpha && score < beta && !searchAborted) {
           result = alphaBeta(
-            board, getOpponent(player), fullChildDepth,
+            ctx, getOpponent(player), fullChildDepth,
             -beta, -alpha, ply + 1, tt, pvTable, true
           );
           score = -result.score;
         }
       }
       
-      unmakeMove(board, undoInfo, player);
+      revertMove(ctx, undoInfo, player);
       searchedMoves++;
     }
     
@@ -295,6 +350,11 @@ export function iterativeDeepening(
      * Reuse a TT instance (defaults to global TT).
      */
     tt?: TranspositionTable;
+    /**
+     * Optional NNUE weights. When present, the search uses NNUE for leaf eval and (root) ordering.
+     * When absent, search falls back to handcrafted evaluation.
+     */
+    nnueWeights?: NnueWeights | null;
   }
 ): SearchResult {
   // Initialize search state
@@ -312,6 +372,9 @@ export function iterativeDeepening(
   if (!options?.preserveMoveOrdering) {
     clearMoveOrdering();
   }
+
+  const nnue = options?.nnueWeights ? NnueState.fromBoard(board, options.nnueWeights) : null;
+  const ctx: SearchContext = { board, nnue };
   
   // CRITICAL: Always have a valid move before starting search
   // This guarantees we never return null
@@ -349,7 +412,7 @@ export function iterativeDeepening(
 
     for (let attempt = 0; attempt < 3; attempt++) {
       result = alphaBeta(
-        board, player, depth,
+        ctx, player, depth,
         alpha, beta,
         0, tt, pvTable, true
       );
@@ -436,6 +499,8 @@ class SearchSessionImpl implements SearchSession {
   private maxDepth: number;
   private tt: TranspositionTable;
   private pvTable: PVTable;
+  private nnueWeights: NnueWeights | null;
+  private nnue: NnueState | null = null;
 
   private bestMove: Move | null = null;
   private bestScore = 0;
@@ -443,12 +508,13 @@ class SearchSessionImpl implements SearchSession {
   private lastScore = 0;
   private nextDepth = 1;
 
-  constructor(board: Board, player: Color, maxDepth: number, tt: TranspositionTable) {
+  constructor(board: Board, player: Color, maxDepth: number, tt: TranspositionTable, nnueWeights: NnueWeights | null) {
     this.board = board;
     this.player = player;
     this.maxDepth = maxDepth;
     this.tt = tt;
     this.pvTable = new PVTable();
+    this.nnueWeights = nnueWeights;
     this.resetForPosition();
   }
 
@@ -456,6 +522,8 @@ class SearchSessionImpl implements SearchSession {
     // Age the TT once per new position so entries from old positions become replaceable.
     this.tt.newSearch();
     this.pvTable.clear();
+
+    this.nnue = this.nnueWeights ? NnueState.fromBoard(this.board, this.nnueWeights) : null;
 
     // Seed "best move so far" to guarantee non-null result.
     const moves = generateAllMoves(this.board, this.player);
@@ -500,6 +568,7 @@ class SearchSessionImpl implements SearchSession {
     searchAborted = false;
     nodesSearched = 0;
 
+    const ctx: SearchContext = { board: this.board, nnue: this.nnue };
     const baseWindow = 200000;
 
     for (let depth = this.nextDepth; depth <= this.maxDepth; depth++) {
@@ -515,7 +584,7 @@ class SearchSessionImpl implements SearchSession {
 
       for (let attempt = 0; attempt < 3; attempt++) {
         result = alphaBeta(
-          this.board, this.player, depth,
+          ctx, this.player, depth,
           alpha, beta,
           0, this.tt, this.pvTable, true
         );
@@ -573,9 +642,10 @@ export function createSearchSession(
   board: Board,
   player: Color,
   maxDepth: number = CONFIG.MAX_DEPTH,
-  tt: TranspositionTable = getTranspositionTable()
+  tt: TranspositionTable = getTranspositionTable(),
+  nnueWeights: NnueWeights | null = null
 ): SearchSession {
-  return new SearchSessionImpl(board, player, maxDepth, tt);
+  return new SearchSessionImpl(board, player, maxDepth, tt, nnueWeights);
 }
 
 /**
@@ -586,7 +656,8 @@ export function findBestMove(
   board: Board,
   player: Color,
   timeLimit: number = CONFIG.DEFAULT_TIME,
-  maxDepth: number = CONFIG.MAX_DEPTH
+  maxDepth: number = CONFIG.MAX_DEPTH,
+  nnueWeights: NnueWeights | null = null
 ): SearchResult {
   // Quick check for obvious moves
   
@@ -669,13 +740,13 @@ export function findBestMove(
   if (hasCriticalThreat(board, opponent)) {
     // Under critical threat - use FULL time and depth for defense
     // Don't reduce search when defending - we need the best defense!
-    const result = iterativeDeepening(board, player, timeLimit, maxDepth, { preserveMoveOrdering: true });
+    const result = iterativeDeepening(board, player, timeLimit, maxDepth, { preserveMoveOrdering: true, nnueWeights });
     // iterativeDeepening guarantees a valid move
     return result;
   }
   
   // 4. Full search
-  const result = iterativeDeepening(board, player, timeLimit, maxDepth, { preserveMoveOrdering: true });
+  const result = iterativeDeepening(board, player, timeLimit, maxDepth, { preserveMoveOrdering: true, nnueWeights });
 
   // Root sanity: if the chosen move allows an immediate opponent win, fall back to next-best root candidates.
   if (result.move) {

@@ -25,6 +25,7 @@ export {
   makeMove,
   unmakeMove,
   checkWinAt,
+  getWinnerAfterMove,
   hasWon,
   getTotalStones,
   isBoardEmpty,

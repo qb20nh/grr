@@ -9,6 +9,7 @@ import { ThreatLevel } from './types';
 import { getOpponent } from './utils';
 import { countPatterns } from './patterns';
 import { getThreatLevel, detectForks } from './threats';
+import type { NnueState } from './nnue/evaluator';
 
 /**
  * Calculate pattern-based score
@@ -110,7 +111,7 @@ function connectivityScore(board: Board, player: Color): number {
  * Returns score from the perspective of the given player
  * Positive = good for player, negative = bad for player
  */
-export function evaluate(board: Board, player: Color): number {
+export function evaluateHandcrafted(board: Board, player: Color): number {
   const opponent = getOpponent(player);
 
   // Get pattern counts for both players (also serves as terminal detection).
@@ -165,6 +166,30 @@ export function evaluate(board: Board, player: Color): number {
   score += (board.blackCount - board.whiteCount) * (player === 1 ? 10 : -10);
   
   return score;
+}
+
+/**
+ * Back-compat alias: existing engine code historically imported `evaluate`.
+ */
+export const evaluate = evaluateHandcrafted;
+
+/**
+ * Search evaluation entrypoint.
+ *
+ * When NNUE is available we use it as the hot-path leaf eval.
+ * When NNUE is unavailable (missing/corrupt weights), we fall back to the handcrafted eval.
+ */
+export function evaluateSearch(board: Board, player: Color, nnue: NnueState | null): number {
+  if (nnue) {
+    const v = nnue.evaluateValue(board, player); // [-1, 1]
+    // Clamp defensively against any NaN/Infinity coming from bad weights.
+    if (!Number.isFinite(v)) {
+      return evaluateHandcrafted(board, player);
+    }
+    return Math.round(v * CONFIG.NNUE_VALUE_SCALE);
+  }
+
+  return evaluateHandcrafted(board, player);
 }
 
 /**
@@ -228,7 +253,7 @@ export function evaluateAfterMove(
   }
   
   // Fall back to full evaluation for accuracy
-  return evaluate(board, player);
+  return evaluateHandcrafted(board, player);
 }
 
 /**

@@ -7,9 +7,21 @@ node_modules
 .wrangler
 /.svelte-kit
 /build
+.DS_Store
+
+# Training artifacts
+/training/dist
+/training/data
+/training/nnue/checkpoints
+/training/runs
+/training/best
+
+# Optional generated NNUE weights (bundled when present)
+/static/nnue/weights.bin
+
+__pycache__
 
 # OS
-.DS_Store
 Thumbs.db
 
 # Env

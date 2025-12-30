@@ -1,0 +1,72 @@
+{
+  "fast": {
+    "description": "Quick iteration (minutes). Small self-play + light training + small eval.",
+    "args": {
+      "games": 40,
+      "maxPlies": 300,
+      "selfplayWorkers": 0,
+      "topK": 30,
+      "temperature": 3.0,
+      "epsilon": 0.35,
+      "timeMs": 15,
+      "maxDepth": 5,
+      "hiddenDim": 64,
+      "epochs": 2,
+      "batchSize": 1024,
+      "lr": 0.001,
+      "evalGames": 80,
+      "evalTimeMs": 20,
+      "evalMaxDepth": 6,
+      "evalOpeningPlies": 2,
+      "eloBootstrap": 1000,
+      "evalWorkers": 0
+    }
+  },
+  "balanced": {
+    "description": "Default baseline (good signal/time tradeoff).",
+    "args": {
+      "games": 200,
+      "maxPlies": 600,
+      "selfplayWorkers": 0,
+      "topK": 40,
+      "temperature": 3.0,
+      "epsilon": 0.25,
+      "timeMs": 25,
+      "maxDepth": 6,
+      "hiddenDim": 128,
+      "epochs": 5,
+      "batchSize": 2048,
+      "lr": 0.001,
+      "evalGames": 400,
+      "evalTimeMs": 50,
+      "evalMaxDepth": 8,
+      "evalOpeningPlies": 4,
+      "eloBootstrap": 4000,
+      "evalWorkers": 0
+    }
+  },
+  "rigorous": {
+    "description": "Stronger gating (slower). Larger self-play + heavier eval for higher confidence.",
+    "args": {
+      "games": 800,
+      "maxPlies": 700,
+      "selfplayWorkers": 0,
+      "topK": 40,
+      "temperature": 3.0,
+      "epsilon": 0.2,
+      "timeMs": 35,
+      "maxDepth": 7,
+      "hiddenDim": 128,
+      "epochs": 7,
+      "batchSize": 2048,
+      "lr": 0.0008,
+      "evalGames": 800,
+      "evalTimeMs": 75,
+      "evalMaxDepth": 9,
+      "evalOpeningPlies": 6,
+      "eloBootstrap": 8000,
+      "evalWorkers": 0
+    }
+  }
+}
+

@@ -9,6 +9,7 @@ import {
   createSearchSession,
   moveToLegacy,
   getSearchStats,
+  getTranspositionTable,
   BLACK,
   WHITE,
   CONFIG,
@@ -16,6 +17,8 @@ import {
 import type { Board, Color, Position } from './ai/types';
 import type { SearchSession } from './ai/search';
 import { runTacticalPuzzles } from './ai/puzzles';
+import type { NnueWeights } from './ai/nnue/weights';
+import { getBundledWeightsUrl, loadNnueWeightsOptional } from './ai/nnue/weights';
 
 interface WorkerState {
   board: (string | null)[][];
@@ -100,6 +103,16 @@ function convertState(state: WorkerState): { board: Board; player: Color } {
   return { board, player };
 }
 
+// ---- NNUE weights (optional) ----
+let nnueWeightsPromise: Promise<NnueWeights | null> | null = null;
+
+function getNnueWeights(): Promise<NnueWeights | null> {
+  if (!nnueWeightsPromise) {
+    nnueWeightsPromise = loadNnueWeightsOptional(getBundledWeightsUrl());
+  }
+  return nnueWeightsPromise;
+}
+
 // ---- Pondering (background search during human turn) ----
 let ponderActive = false;
 let ponderGeneration = 0;
@@ -107,10 +120,12 @@ let ponderSession: SearchSession | null = null;
 let ponderSliceMs: number = 60;
 let ponderMaxDepth: number = CONFIG.MAX_DEPTH;
 let ponderDebug = false;
+let ponderLatestPosition: { board: Board; player: Color } | null = null;
 
 function stopPondering(): void {
   ponderActive = false;
   ponderSession = null;
+  ponderLatestPosition = null;
   ponderGeneration++;
 }
 
@@ -123,7 +138,7 @@ async function runPonderLoop(generation: number): Promise<void> {
   }
 }
 
-function startPondering(request: PonderStartRequest): void {
+async function startPondering(request: PonderStartRequest): Promise<void> {
   const { board, player } = convertState(request.state);
   ponderSliceMs = Math.max(10, Math.min(200, Math.floor(request.config?.sliceMs ?? 60)));
   ponderMaxDepth = request.config?.maxDepth ?? CONFIG.MAX_DEPTH;
@@ -131,15 +146,22 @@ function startPondering(request: PonderStartRequest): void {
 
   stopPondering();
   ponderActive = true;
-  ponderSession = createSearchSession(board, player, ponderMaxDepth);
+  ponderLatestPosition = { board, player };
   const myGen = ponderGeneration;
+
+  const nnueWeights = await getNnueWeights();
+  // If pondering was cancelled/restarted while awaiting weights, bail.
+  if (!ponderActive || myGen !== ponderGeneration) return;
+
+  const latest = ponderLatestPosition ?? { board, player };
+  ponderSession = createSearchSession(latest.board, latest.player, ponderMaxDepth, getTranspositionTable(), nnueWeights);
 
   if (ponderDebug) {
     console.log('[AI Worker] Ponder start', {
       sliceMs: ponderSliceMs,
       maxDepth: ponderMaxDepth,
       toMove: request.state.playerToMove ?? request.state.aiColor,
-      stoneCount: board.blackCount + board.whiteCount,
+      stoneCount: latest.board.blackCount + latest.board.whiteCount,
     });
   }
 
@@ -147,9 +169,10 @@ function startPondering(request: PonderStartRequest): void {
 }
 
 function updatePonderPosition(request: PositionUpdateRequest): void {
-  if (!ponderSession) return;
   const { board, player } = convertState(request.state);
   ponderMaxDepth = request.config?.maxDepth ?? ponderMaxDepth;
+  ponderLatestPosition = { board, player };
+  if (!ponderSession) return;
   ponderSession.setPosition(board, player);
 
   if (ponderDebug) {
@@ -163,7 +186,7 @@ function updatePonderPosition(request: PositionUpdateRequest): void {
 /**
  * Handle find best move request
  */
-function handleFindBestMove(request: FindMoveRequest): MoveResult {
+async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult> {
   const startTime = Date.now();
   
   try {
@@ -188,9 +211,11 @@ function handleFindBestMove(request: FindMoveRequest): MoveResult {
         stoneCount: board.blackCount + board.whiteCount,
       });
     }
+
+    const nnueWeights = await getNnueWeights();
     
     // Find best move
-    const result = findBestMove(board, player, timeLimit, maxDepth);
+    const result = findBestMove(board, player, timeLimit, maxDepth, nnueWeights);
     const stats = getSearchStats();
     
     if (!result.move) {
@@ -230,7 +255,7 @@ self.onmessage = (e: MessageEvent) => {
   const request = e.data;
 
   if (request.type === 'ponderStart') {
-    startPondering(request as PonderStartRequest);
+    void startPondering(request as PonderStartRequest);
     return;
   }
 
@@ -245,8 +270,10 @@ self.onmessage = (e: MessageEvent) => {
   }
   
   if (request.type === 'findBestMove') {
-    const result = handleFindBestMove(request as FindMoveRequest);
-    self.postMessage(result);
+    void (async () => {
+      const result = await handleFindBestMove(request as FindMoveRequest);
+      self.postMessage(result);
+    })();
     return;
   }
 

@@ -51,18 +51,20 @@
   });
 
   // Trigger AI on new game when AI plays first
-  let lastTriggeredMoveCount = -1;
+  let prevPhase = '';
   $effect(() => {
     const state = $gameStore;
+    const phase = state.phase;
     
-    // Only trigger when: playing, vs-ai, AI's turn, not thinking, empty board (new game)
-    if (state.phase === 'playing' && 
+    // Detect transition TO 'playing' phase with empty board (new game start)
+    const isNewGameStart = phase === 'playing' && prevPhase !== 'playing' && state.moveHistory.length === 0;
+    prevPhase = phase;
+    
+    // Trigger AI if it's a new game and AI should play first
+    if (isNewGameStart && 
         state.gameMode === 'vs-ai' && 
         state.currentPlayer === state.aiColor && 
-        !state.aiThinking &&
-        state.moveHistory.length === 0 &&
-        lastTriggeredMoveCount !== state.moveHistory.length) {
-      lastTriggeredMoveCount = state.moveHistory.length;
+        !state.aiThinking) {
       setTimeout(() => gameEngine.executeAiTurn(), 500);
     }
   });
