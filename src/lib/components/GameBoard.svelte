@@ -16,7 +16,6 @@
   let hoverPosition: Position | null = $state(null);
   let cursorStyle = $state('crosshair');
   let cellSize = $state(MAX_CELL_SIZE);
-  let aiTriggeredOnMount = false;
 
   function calculateCellSize(): number {
     if (typeof window === 'undefined') return MAX_CELL_SIZE;
@@ -45,18 +44,27 @@
     
     // Listen for resize
     window.addEventListener('resize', resizeBoard);
-    
-    // Check if AI should play first (player chose white)
-    const state = gameStore.getState();
-    if (state.phase === 'playing' && state.gameMode === 'vs-ai' && 
-        state.currentPlayer === state.aiColor && !state.aiThinking) {
-      setTimeout(() => gameEngine.executeAiTurn(), 500);
-      aiTriggeredOnMount = true;
-    }
 
     return () => {
       window.removeEventListener('resize', resizeBoard);
     };
+  });
+
+  // Trigger AI on new game when AI plays first
+  let lastTriggeredMoveCount = -1;
+  $effect(() => {
+    const state = $gameStore;
+    
+    // Only trigger when: playing, vs-ai, AI's turn, not thinking, empty board (new game)
+    if (state.phase === 'playing' && 
+        state.gameMode === 'vs-ai' && 
+        state.currentPlayer === state.aiColor && 
+        !state.aiThinking &&
+        state.moveHistory.length === 0 &&
+        lastTriggeredMoveCount !== state.moveHistory.length) {
+      lastTriggeredMoveCount = state.moveHistory.length;
+      setTimeout(() => gameEngine.executeAiTurn(), 500);
+    }
   });
 
   // Re-render when game state changes
