@@ -8,7 +8,7 @@ import type { Board, Color, PatternCounts, CellIndex } from './types';
 import { ThreatLevel } from './types';
 import { getOpponent } from './utils';
 import { countPatterns } from './patterns';
-import { getThreatLevel, detectForks } from './threats';
+import { getSingleStoneWinningSquares, getThreatLevel, detectForks } from './threats';
 import type { NnueState } from './nnue/evaluator';
 
 /**
@@ -262,20 +262,21 @@ export function evaluateAfterMove(
  */
 export function isQuietPosition(board: Board, player: Color): boolean {
   const opponent = getOpponent(player);
-  
+
+  // Threat-driven quiescence guardrails:
+  // - If the side-to-move can win immediately (Ko-respecting), it's tactical.
+  if (getSingleStoneWinningSquares(board, player, 'respectKo').length > 0) return false;
+
+  // - If the opponent has a win square that would be available on their next turn (Ko-clears),
+  //   the position is tactically unstable (common around Ko).
+  if (getSingleStoneWinningSquares(board, opponent, 'ignoreKo').length > 0) return false;
+
+  // - Critical threats for either side keep the position “noisy”.
   const ourPatterns = countPatterns(board, player);
   const theirPatterns = countPatterns(board, opponent);
-  
-  // Not quiet if there are immediate threats
-  if (ourPatterns.OPEN_FOUR > 0 || ourPatterns.GAP_FOUR > 0) return false;
-  if (theirPatterns.OPEN_FOUR > 0 || theirPatterns.GAP_FOUR > 0) return false;
-  if (ourPatterns.HALF_FOUR > 0) return false;
-  if (theirPatterns.HALF_FOUR > 0) return false;
-  
-  // Not quiet if multiple open threes
-  if (ourPatterns.OPEN_THREE >= 2) return false;
-  if (theirPatterns.OPEN_THREE >= 2) return false;
-  
+  if (getThreatLevel(ourPatterns) >= ThreatLevel.CRITICAL) return false;
+  if (getThreatLevel(theirPatterns) >= ThreatLevel.CRITICAL) return false;
+
   return true;
 }
 

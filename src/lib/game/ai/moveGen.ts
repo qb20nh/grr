@@ -9,7 +9,7 @@ import { EMPTY } from './types';
 import { getOpponent, createReinforceMove, createSingleWinMove, createRiftMove, toIndex, inBounds } from './utils';
 import { isValidPlacement, checkColinearityConstraint, validateReinforce } from './board';
 import { evaluateSinglePosition, evaluateReinforceMove } from './synergy';
-import { evaluateRiftTarget, findWinningPositions, findWinningPositionsAssumingKoClears, getBlockingMask } from './threats';
+import { evaluateRiftTarget, findWinningPositions, findWinningPositionsAssumingKoClears, getBlockingMask, riftBreaksThreat } from './threats';
 import type { BlockingMask } from './threats';
 
 // Precomputed neighbor lists (radius = CONFIG.CANDIDATE_RADIUS) for fast candidate generation.
@@ -325,9 +325,7 @@ export function generateTacticalMoves(
   board: Board,
   player: Color
 ): ScoredMove[] {
-  const moves: ScoredMove[] = [];
   const opponent = getOpponent(player);
-  const blocking = getBlockingMask(board, player, false);
   
   // 1. Winning moves
   const winningPositions = findWinningPositions(board, player);
@@ -340,89 +338,61 @@ export function generateTacticalMoves(
       },
     ];
   }
-  
-  // 2. Blocking moves (if opponent has threats)
-  const blockingPositions: CellIndex[] = [];
-  for (let i = 0; i < BOARD_CELLS; i++) {
-    if (blocking.mask[i] === blocking.stamp) blockingPositions.push(i);
-  }
-  
-  // 3. Threat-creating moves
-  const candidates = getCandidatePositions(board);
-  const threatPositions: CellIndex[] = [];
-  
-  for (const pos of candidates) {
-    if (!isValidPlacement(board, pos)) continue;
-    
-    // Temporarily place
-    board.cells[pos] = player;
-    
-    // Check if creates four or better
-    let createsThreat = false;
-    for (let dir = 0; dir < 4; dir++) {
-      let count = 1;
-      const [dRow, dCol] = [[0,1],[1,0],[1,1],[1,-1]][dir];
-      const row = Math.floor(pos / BOARD_SIZE);
-      const col = pos % BOARD_SIZE;
-      
-      let r = row + dRow, c = col + dCol;
-      while (inBounds(r, c) && board.cells[toIndex(r, c)] === player) {
-        count++; r += dRow; c += dCol;
-      }
-      r = row - dRow; c = col - dCol;
-      while (inBounds(r, c) && board.cells[toIndex(r, c)] === player) {
-        count++; r -= dRow; c -= dCol;
-      }
-      
-      if (count >= 4) {
-        createsThreat = true;
-        break;
-      }
+
+  // 2) Threat-driven tactical move set (for quiescence):
+  // - Direct blocks of opponent (Ko-clears) win squares
+  // - Any move using known blocking squares (pattern-based critical defense)
+  // - High-impact rifts that break threats
+  const opponentWinSquares = findWinningPositionsAssumingKoClears(board, opponent);
+  const opponentWinSet = new Set<CellIndex>(opponentWinSquares);
+  // Ko is temporary; for quiescence we want blocks that remain relevant once Ko clears.
+  const blocking = getBlockingMask(board, player, true);
+
+  const isBlockingSquare = (pos: CellIndex): boolean => blocking.mask[pos] === blocking.stamp;
+  const isDirectWinBlock = (pos: CellIndex): boolean => opponentWinSet.has(pos);
+
+  const tactical: ScoredMove[] = [];
+
+  // Reinforce candidates are already bounded to CONFIG.MAX_PAIRS and ordered by heuristic score.
+  const reinforceMoves = generateReinforceMoves(board, player);
+  for (const m of reinforceMoves) {
+    const mv = m.move;
+    if (mv.action !== 'reinforce') continue;
+
+    // Single-stone wins were handled above.
+    const p1 = mv.pos1;
+    const p2 = (mv as ReinforceMove).pos2;
+
+    if (isDirectWinBlock(p1) || isDirectWinBlock(p2)) {
+      tactical.push(m);
+      continue;
     }
-    
-    board.cells[pos] = EMPTY;
-    
-    if (createsThreat) {
-      threatPositions.push(pos);
+    if (isBlockingSquare(p1) || isBlockingSquare(p2)) {
+      tactical.push(m);
+      continue;
+    }
+    // Heuristic fallback: very high-scoring reinforce moves tend to be threat-creating.
+    if (m.score >= 100000) {
+      tactical.push(m);
     }
   }
-  
-  // Combine all tactical positions
-  const allTactical = new Set([
-    ...winningPositions,
-    ...blockingPositions,
-    ...threatPositions,
-  ]);
-  
-  // Generate pairs from tactical positions
-  const tacticalArray = Array.from(allTactical);
-  
-  for (let i = 0; i < tacticalArray.length; i++) {
-    for (let j = i + 1; j < tacticalArray.length; j++) {
-      const pos1 = tacticalArray[i];
-      const pos2 = tacticalArray[j];
-      
-      if (!isValidPlacement(board, pos1) || !isValidPlacement(board, pos2)) continue;
-      if (!checkColinearityConstraint(board, pos1, pos2, player)) continue;
-      
-      const score = evaluateReinforceMove(board, pos1, pos2, player, blocking);
-      moves.push({
-        move: createReinforceMove(pos1, pos2),
-        score,
-      });
-    }
-  }
-  
-  // Also include high-value rift moves
+
+  // Rift candidates (bounded to CONFIG.MAX_RIFTS).
   const riftMoves = generateRiftMoves(board, player);
-  for (const rm of riftMoves.slice(0, 5)) {
-    if (rm.score > 50000) { // Only high-value rifts
-      moves.push(rm);
+  for (const rm of riftMoves) {
+    const rpos = (rm.move as RiftMove).pos;
+    if (rm.score >= 50000 || riftBreaksThreat(board, rpos, player)) {
+      tactical.push(rm);
     }
   }
-  
-  moves.sort((a, b) => b.score - a.score);
-  return moves.slice(0, 20);
+
+  // Safety: if our threat-driven filter yields nothing, fall back to a small top slice.
+  if (tactical.length === 0) {
+    return generateAllMoves(board, player).slice(0, 20);
+  }
+
+  tactical.sort((a, b) => b.score - a.score);
+  return tactical.slice(0, 20);
 }
 
 /**

@@ -9,6 +9,7 @@ import type { Board as InternalBoard, Color, Move } from './types';
 import { BLACK, WHITE } from './types';
 import { boardFrom2D, cloneBoard, makeMove, unmakeMove, getWinnerAfterMove, validateReinforce } from './board';
 import { findBestMove } from './search';
+import { threatSpaceSearch } from './tss';
 import { findWinningPositions } from './threats';
 import { generateAllMoves } from './moveGen';
 import { toIndex, toPosition, isSingleWinMove } from './utils';
@@ -171,6 +172,51 @@ export function runTacticalPuzzles(timeLimitMs: number = 250): PuzzleRunSummary 
         if (hasImmediateWinningMove(after, WHITE)) {
           return { ok: false, details: 'Opponent still has an immediate winning move after rift.' };
         }
+        return { ok: true };
+      },
+    },
+    {
+      name: 'TSS regression: Ko-blocked half-four is defended by rift (Ko treated as open for threat detection)',
+      toMove: WHITE,
+      ko: { row: 7, col: 4 },
+      board: (() => {
+        const g = emptyGrid();
+        // Black has a HALF_FOUR along the left edge (row 7, cols 0-3). The only winning square is (7,4),
+        // but it is currently Ko-blocked for White, so White must defend by rifting one of the black stones.
+        place(g, 'black', 7, 0);
+        place(g, 'black', 7, 1);
+        place(g, 'black', 7, 2);
+        place(g, 'black', 7, 3);
+        // A couple white stones elsewhere.
+        place(g, 'white', 6, 6);
+        place(g, 'white', 8, 8);
+        return g;
+      })(),
+      assert: (board, move) => {
+        // 1) Engine move should be a rift defense (cannot block Ko square by placement).
+        if (move.action !== 'rift') {
+          return { ok: false, details: 'Expected rift defense against Ko-blocked HALF_FOUR.' };
+        }
+        const after = applyMove(board, move, WHITE);
+        if (hasImmediateWinningMove(after, BLACK)) {
+          return { ok: false, details: 'Black still has an immediate winning move after the defense.' };
+        }
+
+        // 2) TSS should also find a rift refutation (regression: requires Ko-aware threat detection).
+        const tss = threatSpaceSearch(board, BLACK, WHITE, {
+          timeLimitMs: 200,
+          maxPlies: 6,
+          maxAttackerMoves: 16,
+          maxDefenderMoves: 32,
+        });
+        if (tss.status !== 'not_proven' || !tss.move || tss.move.action !== 'rift') {
+          return { ok: false, details: `Expected TSS defender refutation rift, got status=${tss.status} move=${tss.move?.action ?? 'null'}` };
+        }
+        const afterTss = applyMove(board, tss.move, WHITE);
+        if (hasImmediateWinningMove(afterTss, BLACK)) {
+          return { ok: false, details: 'TSS refutation does not actually prevent an immediate black win.' };
+        }
+
         return { ok: true };
       },
     },
@@ -389,6 +435,49 @@ export function runTacticalPuzzles(timeLimitMs: number = 250): PuzzleRunSummary 
           };
         }
 
+        return { ok: true };
+      },
+    },
+    {
+      name: 'Regression (GRR1 corner filler): avoid wasting (0,0) as a defensive second stone',
+      toMove: BLACK,
+      board: (() => {
+        const g = emptyGrid();
+        // GRR1 replay (black=ai, white=human). Reconstruct position after move 12 (white),
+        // right before black move 13 where the AI previously played a forced block + (0,0) filler.
+        //
+        // Moves 1..12:
+        applyLegacyReinforce(g, 'black', [7, 8], [8, 6]);   // 1 bR7,8;8,6
+        applyLegacyReinforce(g, 'white', [7, 6], [8, 8]);   // 2 wR7,6;8,8
+        applyLegacyReinforce(g, 'black', [5, 8], [9, 8]);   // 3 bR5,8;9,8
+        applyLegacyReinforce(g, 'white', [6, 7], [7, 9]);   // 4 wR6,7;7,9
+        applyLegacyReinforce(g, 'black', [8, 7], [8, 9]);   // 5 bR8,7;8,9
+        applyLegacyReinforce(g, 'white', [6, 8], [9, 7]);   // 6 wR6,8;9,7
+        applyLegacyReinforce(g, 'black', [6, 10], [10, 6]); // 7 bR6,10;10,6
+        applyLegacyReinforce(g, 'white', [5, 7], [6, 5]);   // 8 wR5,7;6,5
+        applyLegacyReinforce(g, 'black', [8, 10], [4, 6]);  // 9 bR8,10;4,6
+        applyLegacyReinforce(g, 'white', [6, 6], [8, 5]);   // 10 wR6,6;8,5
+        applyLegacyReinforce(g, 'black', [6, 4], [6, 9]);   // 11 bR6,4;6,9
+        applyLegacyReinforce(g, 'white', [7, 5], [9, 4]);   // 12 wR7,5;9,4
+        return g;
+      })(),
+      assert: (board, move) => {
+        // This regression targets a specific pathological behavior:
+        // when a single forced block exists, the second stone was previously chosen by a raw
+        // index sweep, leading to (0,0) corner garbage. We allow any correct defense, but
+        // specifically forbid placing at (0,0) as the second stone.
+        if (move.action === 'reinforce') {
+          const corner = toIndex(0, 0);
+          const playedCorner = move.pos1 === corner || (!isSingleWinMove(move) && move.pos2 === corner);
+          if (playedCorner) {
+            return { ok: false, details: 'Regression: played (0,0) as a defensive filler stone.' };
+          }
+        }
+
+        const after = applyMove(board, move, BLACK);
+        if (hasImmediateWinningMove(after, WHITE)) {
+          return { ok: false, details: 'Defense still allows an immediate white win.' };
+        }
         return { ok: true };
       },
     },

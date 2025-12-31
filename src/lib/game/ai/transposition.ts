@@ -19,7 +19,9 @@ export class TranspositionTable {
   private flags: Uint8Array;
   private moves: Int32Array;
   private size: number;
-  private mask: number;
+  private assoc: number;
+  private sets: number;
+  private setMask: number;
   private currentAge: number;
   private hits: number;
   private misses: number;
@@ -32,8 +34,14 @@ export class TranspositionTable {
     if (size <= 0 || (size & (size - 1)) !== 0) {
       throw new Error(`TT size must be a positive power of two, got ${size}`);
     }
+    if (size < 2) {
+      throw new Error(`TT size must be >= 2 for 2-way buckets, got ${size}`);
+    }
     this.size = size;
-    this.mask = size - 1; // Assumes size is power of 2
+    // 2-way set-associative TT (same total entry count as before).
+    this.assoc = 2;
+    this.sets = size / this.assoc;
+    this.setMask = this.sets - 1; // sets is a power of two (size is a power of two, assoc=2)
     this.keys = new BigUint64Array(size);
     this.scores = new Int32Array(size);
     this.depths = new Uint16Array(size);
@@ -63,41 +71,43 @@ export class TranspositionTable {
   }
   
   /**
-   * Get index in table from hash
+   * Get the base index (first slot) for a 2-way bucket from hash
    */
-  private getIndex(hash: bigint): number {
-    // Use lower bits of hash for index
-    return Number(hash & BigInt(this.mask));
+  private getBaseIndex(hash: bigint): number {
+    // Use lower bits of hash for set index, then scale by associativity.
+    // Shift is safe: set index fits in 32-bit range here.
+    return Number(hash & BigInt(this.setMask)) << 1;
   }
   
   /**
    * Probe the transposition table for an entry
    */
   probe(hash: bigint): TTEntry | null {
-    const index = this.getIndex(hash);
-    const storedDepth = this.depths[index];
-    
-    if (storedDepth === 0) {
+    const base = this.getBaseIndex(hash);
+    const idx0 = base;
+    const idx1 = base + 1;
+
+    const d0 = this.depths[idx0];
+    const d1 = this.depths[idx1];
+
+    let idx = -1;
+    if (d0 !== 0 && this.keys[idx0] === hash) idx = idx0;
+    else if (d1 !== 0 && this.keys[idx1] === hash) idx = idx1;
+
+    if (idx === -1) {
       this.misses++;
+      if (d0 !== 0 || d1 !== 0) this.collisions++;
       return null;
     }
-    
-    // Verify hash matches (collision detection)
-    const storedHash = this.keys[index];
-    if (storedHash !== hash) {
-      this.collisions++;
-      this.misses++;
-      return null;
-    }
-    
-    this.countHit(this.ages[index]);
+
+    this.countHit(this.ages[idx]);
     return {
       hash,
-      depth: storedDepth,
-      score: this.scores[index],
-      flag: codeToFlag(this.flags[index]),
-      bestMove: decodeMove(this.moves[index]),
-      age: this.ages[index],
+      depth: this.depths[idx],
+      score: this.scores[idx],
+      flag: codeToFlag(this.flags[idx]),
+      bestMove: decodeMove(this.moves[idx]),
+      age: this.ages[idx],
     };
   }
   
@@ -112,39 +122,53 @@ export class TranspositionTable {
     bestMove: Move | null,
     ply: number
   ): void {
-    const index = this.getIndex(hash);
-    const existingDepth = this.depths[index];
-    const existingHash = this.keys[index];
-    const existingAge = this.ages[index];
-    
-    // Replacement policy: always replace if:
-    // 1. Slot is empty
-    // 2. New entry has greater depth
-    // 3. Existing entry is from older search
-    // 4. Existing entry has same hash (update)
-    
-    // Replacement policy:
-    // - Always replace empty slots or same-hash updates.
-    // - Prefer deeper results.
-    // - Allow replacing older entries, but avoid wiping deep old entries with shallow new ones.
-    const isOlder = existingAge !== this.currentAge;
-    const oldButComparableDepth = depth + 2 >= existingDepth;
+    const base = this.getBaseIndex(hash);
+    const idx0 = base;
+    const idx1 = base + 1;
 
-    if (
-      existingDepth === 0 ||
-      existingHash === hash ||
-      depth >= existingDepth ||
-      (isOlder && oldButComparableDepth)
-    ) {
-      this.keys[index] = hash;
-      this.depths[index] = depth;
-      // Store score in a ply-neutral form for mate-distance values so TT remains valid
-      // across transpositions reached at different plies.
-      this.scores[index] = toTTScore(score, ply);
-      this.flags[index] = flagToCode(flag);
-      this.moves[index] = encodeMove(bestMove);
-      this.ages[index] = this.currentAge;
+    const d0 = this.depths[idx0];
+    const d1 = this.depths[idx1];
+    const h0 = this.keys[idx0];
+    const h1 = this.keys[idx1];
+
+    // Prefer updating an existing matching entry.
+    let idx = -1;
+    if (d0 !== 0 && h0 === hash) idx = idx0;
+    else if (d1 !== 0 && h1 === hash) idx = idx1;
+    else if (d0 === 0) idx = idx0;
+    else if (d1 === 0) idx = idx1;
+
+    if (idx === -1) {
+      // Choose a replacement slot using a conservative depth/age policy.
+      const age0 = this.ages[idx0];
+      const age1 = this.ages[idx1];
+      const isOlder0 = age0 !== this.currentAge;
+      const isOlder1 = age1 !== this.currentAge;
+
+      const replaceable0 = depth >= d0 || (isOlder0 && depth + 2 >= d0);
+      const replaceable1 = depth >= d1 || (isOlder1 && depth + 2 >= d1);
+
+      if (!replaceable0 && !replaceable1) {
+        return; // keep both entries
+      }
+
+      if (replaceable0 && !replaceable1) idx = idx0;
+      else if (!replaceable0 && replaceable1) idx = idx1;
+      else {
+        // Both replaceable: prefer older, then shallower.
+        if (isOlder0 !== isOlder1) idx = isOlder0 ? idx0 : idx1;
+        else idx = d0 <= d1 ? idx0 : idx1;
+      }
     }
+
+    this.keys[idx] = hash;
+    this.depths[idx] = depth;
+    // Store score in a ply-neutral form for mate-distance values so TT remains valid
+    // across transpositions reached at different plies.
+    this.scores[idx] = toTTScore(score, ply);
+    this.flags[idx] = flagToCode(flag);
+    this.moves[idx] = encodeMove(bestMove);
+    this.ages[idx] = this.currentAge;
   }
   
   /**
@@ -166,24 +190,27 @@ export class TranspositionTable {
     beta: number,
     ply: number
   ): [boolean, number, Move | null] {
-    const index = this.getIndex(hash);
-    const storedDepth = this.depths[index];
-    
-    if (storedDepth === 0) {
+    const base = this.getBaseIndex(hash);
+    const idx0 = base;
+    const idx1 = base + 1;
+
+    const d0 = this.depths[idx0];
+    const d1 = this.depths[idx1];
+
+    let idx = -1;
+    if (d0 !== 0 && this.keys[idx0] === hash) idx = idx0;
+    else if (d1 !== 0 && this.keys[idx1] === hash) idx = idx1;
+
+    if (idx === -1) {
       this.misses++;
+      if (d0 !== 0 || d1 !== 0) this.collisions++;
       return [false, 0, null];
     }
 
-    const storedHash = this.keys[index];
-    if (storedHash !== hash) {
-      this.collisions++;
-      this.misses++;
-      return [false, 0, null];
-    }
+    this.countHit(this.ages[idx]);
 
-    this.countHit(this.ages[index]);
-
-    const bestMove = decodeMove(this.moves[index]);
+    const bestMove = decodeMove(this.moves[idx]);
+    const storedDepth = this.depths[idx];
 
     if (storedDepth < depth) {
       return [false, 0, bestMove];
@@ -192,8 +219,8 @@ export class TranspositionTable {
     // Convert stored TT score into the current node's score domain.
     // This matters for mate-distance (WIN_SCORE/LOSS_SCORE +/- ply) where ply is not
     // part of the TT key.
-    const score = fromTTScore(this.scores[index], ply);
-    const flag = codeToFlag(this.flags[index]);
+    const score = fromTTScore(this.scores[idx], ply);
+    const flag = codeToFlag(this.flags[idx]);
     
     if (flag === 'exact') {
       return [true, score, bestMove];

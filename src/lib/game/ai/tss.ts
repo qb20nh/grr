@@ -8,9 +8,10 @@
  */
 
 import type { Board, CellIndex, Color, Move } from './types';
-import { createReinforceMove, createRiftMove, createSingleWinMove, getOpponent, isSingleWinMove } from './utils';
-import { makeMove, unmakeMove, checkWinAt, validateReinforce } from './board';
+import { createReinforceMove, createRiftMove, createSingleWinMove, getOpponent } from './utils';
+import { makeMove, unmakeMove, validateReinforce } from './board';
 import { scanLine, classifyLine } from './patterns';
+import { getSingleStoneWinningSquares } from './threats';
 import { withTurn } from './zobrist';
 import { getCandidatePositions, scoreCandidates } from './moveGen';
 import { decodeMove, encodeMove, MOVE_CODE_NONE } from './moveCodec';
@@ -52,6 +53,24 @@ const MOVE_NONE = MOVE_CODE_NONE;
 const ROOT_CACHE_MAX = 20000;
 const rootCache = new Map<bigint, MemoEntry>();
 
+// Prefer sensible filler squares near the main action when a defender must play a forced block
+// and the second stone is otherwise unconstrained. This prevents “corner garbage” placements.
+const CENTER_FIRST: readonly CellIndex[] = (() => {
+  const out: CellIndex[] = Array.from({ length: 225 }, (_, i) => i);
+  const center = 7;
+  out.sort((a, b) => {
+    const ar = Math.floor(a / 15);
+    const ac = a % 15;
+    const br = Math.floor(b / 15);
+    const bc = b % 15;
+    const da = Math.abs(ar - center) + Math.abs(ac - center);
+    const db = Math.abs(br - center) + Math.abs(bc - center);
+    if (da !== db) return da - db;
+    return a - b;
+  });
+  return out;
+})();
+
 function memoKey(board: Board, attacker: Color, toMove: Color, pliesLeft: number): bigint {
   // Include turn + attacker + remaining depth.
   // We keep it as BigInt for cheap hashing without string allocations.
@@ -74,79 +93,12 @@ function rootKey(board: Board, attacker: Color, toMove: Color, options: TssOptio
  * Compute immediate winning squares for `player` (i.e., where a single stone would win).
  * This avoids scanning all empties by detecting 4-threat patterns from existing stones.
  */
-function getImmediateWinSquares(board: Board, player: Color): CellIndex[] {
-  const wins = new Set<CellIndex>();
-
-  for (let pos = 0; pos < 225; pos++) {
-    if (board.cells[pos] !== player) continue;
-
-    for (let dir = 0; dir < 4; dir++) {
-      const info = scanLine(board, pos, dir, player);
-      const pattern = classifyLine(info);
-
-      if (pattern === 'OPEN_FOUR' || pattern === 'HALF_FOUR') {
-        for (const e of info.extendPositions) wins.add(e);
-      } else if (pattern === 'GAP_FOUR') {
-        for (const g of info.gapPositions) wins.add(g);
-      }
-    }
-  }
-
-  return Array.from(wins);
-}
-
-function getImmediateWinningMoves(board: Board, player: Color, limit: number): Move[] {
-  const moves: Move[] = [];
-
-  // 1) Single-stone wins (special rule).
-  const singleWins = getImmediateWinSquares(board, player);
-  for (const w of singleWins) {
-    moves.push(createSingleWinMove(w));
-    if (moves.length >= limit) return moves;
-  }
-
-  // 2) Two-stone immediate wins (normal reinforce move).
-  // Bounded pairing over top candidate squares to keep this fast.
-  const candidates = scoreCandidates(board, getCandidatePositions(board), player)
-    .slice(0, 18)
-    .map(s => s.pos);
-
-  // Try higher-value pairs first.
-  for (let i = 0; i < candidates.length && moves.length < limit; i++) {
-    for (let j = i + 1; j < candidates.length && moves.length < limit; j++) {
-      const a = candidates[i];
-      const b = candidates[j];
-      if (!validateReinforce(board, a, b, player)) continue;
-
-      const mv = createReinforceMove(a, b);
-      const undo = makeMove(board, mv, player);
-      const win = winsAfterReinforce(board, player, mv);
-      unmakeMove(board, undo, player);
-
-      if (win) {
-        moves.push(mv);
-      }
-    }
-  }
-
-  return moves;
-}
-
-function collectThreatSquares(threatMoves: Move[]): CellIndex[] {
-  const s = new Set<CellIndex>();
-  for (const mv of threatMoves) {
-    if (mv.action !== 'reinforce') continue;
-    s.add(mv.pos1);
-    if (!isSingleWinMove(mv)) s.add(mv.pos2);
-  }
-  return Array.from(s);
-}
-
-function winsAfterReinforce(board: Board, player: Color, move: Move): boolean {
-  if (move.action !== 'reinforce') return false;
-  if (checkWinAt(board, move.pos1, player)) return true;
-  if (!isSingleWinMove(move) && checkWinAt(board, move.pos2, player)) return true;
-  return false;
+function getImmediateWinSquares(
+  board: Board,
+  player: Color,
+  koMode: 'respectKo' | 'ignoreKo' = 'respectKo'
+): CellIndex[] {
+  return getSingleStoneWinningSquares(board, player, koMode);
 }
 
 /**
@@ -192,11 +144,45 @@ function riftCreatesWinForRemovedColor(board: Board, riftPos: CellIndex, removed
 }
 
 function generateForcingAttackerMoves(board: Board, attacker: Color, limit: number): Move[] {
-  // Use existing candidate generation (already Ko-aware) and filter to forcing reinforce moves.
+  const defender = getOpponent(attacker);
+  const moves: Move[] = [];
+
+  // 1) Rift candidates (attacker-side tactic): removing a defender stone can create a Ko-locked
+  // winning square the defender can't occupy immediately.
+  //
+  // We keep this bounded by only considering defender stones near attacker stones.
+  const riftTargets: { pos: CellIndex; score: number }[] = [];
+  for (let pos = 0; pos < 225; pos++) {
+    if (board.cells[pos] !== defender) continue;
+
+    const row = Math.floor(pos / 15);
+    const col = pos % 15;
+
+    let adjacentAttackers = 0;
+    for (let dr = -1; dr <= 1; dr++) {
+      for (let dc = -1; dc <= 1; dc++) {
+        if (dr === 0 && dc === 0) continue;
+        const r = row + dr;
+        const c = col + dc;
+        if (r < 0 || r >= 15 || c < 0 || c >= 15) continue;
+        if (board.cells[r * 15 + c] === attacker) adjacentAttackers++;
+      }
+    }
+
+    if (adjacentAttackers > 0) {
+      riftTargets.push({ pos, score: adjacentAttackers });
+    }
+  }
+
+  riftTargets.sort((a, b) => b.score - a.score);
+  const riftQuota = Math.min(limit, 6);
+  for (let i = 0; i < riftTargets.length && moves.length < riftQuota; i++) {
+    moves.push(createRiftMove(riftTargets[i].pos));
+  }
+
+  // 2) Reinforce candidates: pair top empty squares (Ko-aware).
   const candidates = scoreCandidates(board, getCandidatePositions(board), attacker);
   const top = candidates.slice(0, Math.min(18, candidates.length));
-
-  const moves: Move[] = [];
 
   // Pair top candidates (ordered by single-position score)
   for (let i = 0; i < top.length && moves.length < limit; i++) {
@@ -217,31 +203,68 @@ function generateDefenderReplies(
   defender: Color,
   threatSquares: CellIndex[],
   limit: number
-): Move[] {
+): { replies: Move[]; complete: boolean } {
   const replies: Move[] = [];
-
   const threatSet = new Set<CellIndex>(threatSquares);
 
-  // 1) Rift replies: try removing attacker stones that participate in threat patterns.
-  // We keep this conservative by only rifting stones on lines that yield threat squares.
+  // 1) Reinforce replies: occupy ALL current immediate win squares.
+  // - If there are 2+ threat squares, defender must cover them all (or lose immediately).
+  // - If there is exactly 1 threat square, defender must place there, but can choose any
+  //   legal second stone; enumerate all legal pairings (bounded by `limit`).
+  if (threatSquares.length === 2) {
+    const a = threatSquares[0];
+    const b = threatSquares[1];
+    if (validateReinforce(board, a, b, defender)) {
+      replies.push(createReinforceMove(a, b));
+    }
+  } else if (threatSquares.length === 1) {
+    const block = threatSquares[0];
+    // Try good local fillers first (near existing stones), then fall back to a center-first sweep.
+    const preferred = scoreCandidates(board, getCandidatePositions(board), defender)
+      .slice(0, 32)
+      .map(s => s.pos);
+
+    const seen = new Set<CellIndex>();
+    for (const f of preferred) {
+      if (f === block) continue;
+      if (seen.has(f)) continue;
+      seen.add(f);
+      if (!validateReinforce(board, block, f, defender)) continue;
+      replies.push(createReinforceMove(block, f));
+      if (replies.length >= limit) return { replies, complete: false };
+    }
+
+    for (const f of CENTER_FIRST) {
+      if (f === block) continue;
+      if (seen.has(f)) continue;
+      seen.add(f);
+      if (!validateReinforce(board, block, f, defender)) continue;
+      replies.push(createReinforceMove(block, f));
+      if (replies.length >= limit) return { replies, complete: false };
+    }
+  }
+
+  // 2) Rift replies: remove attacker stones that participate in the immediate-win patterns
+  // that create these threat squares. This is complete for the “single-stone win square” model.
   const riftCandidates = new Set<CellIndex>();
   for (let pos = 0; pos < 225; pos++) {
     if (board.cells[pos] !== attacker) continue;
 
     for (let dir = 0; dir < 4; dir++) {
-      const info = scanLine(board, pos, dir, attacker);
+      // Threat squares are computed with Ko ignored (attacker moves after Ko clears/changes),
+      // so pattern detection here must also treat Ko as open.
+      const info = scanLine(board, pos, dir, attacker, true);
       const pattern = classifyLine(info);
-      // Include OPEN_THREE / GAP_THREE because in two-stone reinforce they can be one-move wins.
-      if (
-        pattern !== 'OPEN_FOUR' &&
-        pattern !== 'HALF_FOUR' &&
-        pattern !== 'GAP_FOUR' &&
-        pattern !== 'OPEN_THREE' &&
-        pattern !== 'GAP_THREE'
-      ) continue;
 
-      const wins: CellIndex[] =
-        (pattern === 'GAP_FOUR' || pattern === 'GAP_THREE') ? info.gapPositions : info.extendPositions;
+      let wins: CellIndex[] | null = null;
+      if (pattern === 'OPEN_FOUR' || pattern === 'HALF_FOUR') {
+        wins = info.extendPositions;
+      } else if (pattern === 'GAP_FOUR') {
+        wins = info.gapPositions;
+      } else {
+        continue;
+      }
+
       if (wins.some(w => threatSet.has(w))) {
         riftCandidates.add(pos);
         break;
@@ -251,35 +274,12 @@ function generateDefenderReplies(
 
   for (const pos of riftCandidates) {
     replies.push(createRiftMove(pos));
-    if (replies.length >= limit) return replies;
-  }
-
-  // 2) Reinforce replies: place on threat squares (and another legal filler) to eliminate all threats.
-  const filler = scoreCandidates(board, getCandidatePositions(board), defender)
-    .slice(0, 12)
-    .map(s => s.pos);
-
-  const block = threatSquares.slice(0, 8); // keep bounded
-
-  for (const b1 of block) {
-    // Prefer blocking with another threat square if possible.
-    for (const b2 of block) {
-      if (b2 <= b1) continue;
-      if (!validateReinforce(board, b1, b2, defender)) continue;
-      replies.push(createReinforceMove(b1, b2));
-      if (replies.length >= limit) return replies;
-    }
-
-    // Otherwise block one + filler
-    for (const f of filler) {
-      if (f === b1) continue;
-      if (!validateReinforce(board, b1, f, defender)) continue;
-      replies.push(createReinforceMove(b1, f));
-      if (replies.length >= limit) return replies;
+    if (replies.length >= limit) {
+      return { replies, complete: false };
     }
   }
 
-  return replies;
+  return { replies, complete: true };
 }
 
 /**
@@ -340,10 +340,10 @@ export function threatSpaceSearch(
       };
     }
 
-    // Immediate win check (single-stone rule OR two-stone reinforce win)
-    const immediateWins = getImmediateWinningMoves(board, currentToMove, 1);
-    if (immediateWins.length > 0) {
-      const winMove = immediateWins[0];
+    // Immediate win check (single-stone rule).
+    const winSquaresNow = getImmediateWinSquares(board, currentToMove, 'respectKo');
+    if (winSquaresNow.length > 0) {
+      const winMove = createSingleWinMove(winSquaresNow[0]);
       const status: TssStatus = currentToMove === attacker ? 'proven_win' : 'not_proven';
       const result: TssResult = { status, move: winMove, pv: [winMove], nodes };
       memo.set(key, { status, bestMoveCode: encodeMove(winMove) });
@@ -359,16 +359,18 @@ export function threatSpaceSearch(
       for (const mv of candidates) {
         const undo = makeMove(board, mv, attacker);
 
-        // If this move directly wins (should be rare with single-win rule), we are done.
-        if (winsAfterReinforce(board, attacker, mv)) {
-          unmakeMove(board, undo, attacker);
-          const res: TssResult = { status: 'proven_win', move: mv, pv: [mv], nodes };
-          memo.set(key, { status: 'proven_win', bestMoveCode: encodeMove(mv) });
-          return res;
+        // Rift guard: never allow an attacker rift that immediately gives the removed color an exact-5.
+        if (mv.action === 'rift') {
+          if (riftCreatesWinForRemovedColor(board, mv.pos, defender)) {
+            unmakeMove(board, undo, attacker);
+            continue;
+          }
         }
 
-        // Forcing requirement: attacker must threaten an immediate win next ply.
-        const threats = getImmediateWinningMoves(board, attacker, 2);
+        // Forcing requirement: attacker must threaten an immediate win on their next turn.
+        // Important: the current Ko will clear/replace on the defender's reply, so compute
+        // these threat squares with Ko ignored.
+        const threats = getImmediateWinSquares(board, attacker, 'ignoreKo');
         if (threats.length === 0) {
           unmakeMove(board, undo, attacker);
           continue;
@@ -396,16 +398,14 @@ export function threatSpaceSearch(
     }
 
     // Defender node (AND): generate forced replies that eliminate all attacker immediate wins.
-    const attackerThreatMoves = getImmediateWinningMoves(board, attacker, 10);
-    if (attackerThreatMoves.length === 0) {
+    const attackerThreatSquares = getImmediateWinSquares(board, attacker, 'ignoreKo');
+    if (attackerThreatSquares.length === 0) {
       // No immediate threat to respond to; within threat-space this means no proof continuation.
       memo.set(key, { status: 'not_proven', bestMoveCode: MOVE_NONE });
       return { status: 'not_proven', move: null, pv: [], nodes };
     }
 
-    const attackerThreatSquares = collectThreatSquares(attackerThreatMoves);
-
-    const replies = generateDefenderReplies(
+    const { replies, complete } = generateDefenderReplies(
       board,
       attacker,
       currentToMove,
@@ -420,7 +420,6 @@ export function threatSpaceSearch(
     }
 
     let sawTimeout = false;
-    let bestRefutation: Move | null = null;
 
     for (const reply of replies) {
       const undo = makeMove(board, reply, currentToMove);
@@ -434,8 +433,8 @@ export function threatSpaceSearch(
       }
 
       // Reply must actually eliminate immediate win threats; otherwise attacker wins next move.
-      const stillThreats = getImmediateWinningMoves(board, attacker, 1);
-      if (stillThreats.length > 0) {
+      const stillThreatSquares = getImmediateWinSquares(board, attacker, 'respectKo');
+      if (stillThreatSquares.length > 0) {
         unmakeMove(board, undo, currentToMove);
         continue;
       }
@@ -450,28 +449,44 @@ export function threatSpaceSearch(
 
       if (child.status !== 'proven_win') {
         // Defender found a refutation (attacker not proven).
-        bestRefutation = reply;
         memo.set(key, { status: 'not_proven', bestMoveCode: encodeMove(reply) });
         return { status: 'not_proven', move: reply, pv: [], nodes };
       }
     }
 
-    // All defenses lead to proven attacker win (within our threat space).
-    const status: TssStatus = sawTimeout ? 'timeout' : 'proven_win';
-    memo.set(key, { status, bestMoveCode: encodeMove(bestRefutation) });
-    return { status, move: bestRefutation, pv: [], nodes };
+    // All explored defenses lead to a proven attacker win.
+    // Only claim proven_win if our defender reply set is complete and we did not hit timeouts.
+    if (sawTimeout || !complete) {
+      memo.set(key, { status: 'timeout', bestMoveCode: MOVE_NONE });
+      return { status: 'timeout', move: null, pv: [], nodes };
+    }
+
+    memo.set(key, { status: 'proven_win', bestMoveCode: MOVE_NONE });
+    return { status: 'proven_win', move: null, pv: [], nodes };
   }
 
-  const res = dfs(toMove, options.maxPlies);
+  // Iterative deepening within the time slice: deepen in even plies (full attacker/defender pairs),
+  // returning the best non-timeout result from the deepest completed iteration.
+  let best: TssResult = { status: 'not_proven', move: null, pv: [], nodes: 0 };
+  let completedPlies = 0;
+  for (let plies = 2; plies <= options.maxPlies; plies += 2) {
+    const res = dfs(toMove, plies);
+    if (res.status === 'timeout') break;
+    best = res;
+    completedPlies = plies;
+    if (best.status === 'proven_win') break;
+  }
 
   // Ensure nodes/time are consistent on the returned object.
   const out: TssResult = {
-    ...res,
+    ...best,
     nodes,
   };
 
-  // Cache root result across calls (avoid caching timeouts).
-  if (out.status !== 'timeout') {
+  // Cache root result across calls only when we actually completed the requested depth,
+  // or when we found a proven win earlier (safe to reuse).
+  const canCache = out.status !== 'timeout' && (completedPlies === options.maxPlies || out.status === 'proven_win');
+  if (canCache) {
     if (rootCache.size >= ROOT_CACHE_MAX) rootCache.clear();
     rootCache.set(rKey, { status: out.status, bestMoveCode: encodeMove(out.move) });
   }

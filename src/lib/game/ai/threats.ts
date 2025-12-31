@@ -7,7 +7,7 @@ import { BOARD_CELLS } from './constants';
 import type { Board, CellIndex, Color, Fork, PatternCounts } from './types';
 import { ThreatLevel, EMPTY } from './types';
 import { getOpponent } from './utils';
-import { countPatterns, scanLine, classifyLine, countThreatsCreated } from './patterns';
+import { countPatterns, scanLine, classifyLine } from './patterns';
 
 // ---- Blocking mask (scratch) ----
 export interface BlockingMask {
@@ -229,20 +229,39 @@ export function findBlockingPositions(board: Board, player: Color): CellIndex[] 
   return out;
 }
 
+export type ThreatKoMode = 'respectKo' | 'ignoreKo';
+
 /**
  * Variant: find winning positions assuming Ko will not block the placement
  * on the opponent's next move (i.e. treat Ko as open for placement).
  */
 export function findWinningPositionsAssumingKoClears(board: Board, player: Color): CellIndex[] {
-  return findWinningPositions(board, player, true);
+  return getSingleStoneWinningSquares(board, player, 'ignoreKo');
 }
 
 /**
- * Find positions that create immediate wins
+ * Find squares where placing a *single stone* would immediately win (exact-5).
+ *
+ * Note: in Gomoku Rift, Ko only blocks placement for the next move. Some callers
+ * intentionally use `ignoreKo=true` to model “threats that may exist on the next ply”
+ * when Ko is expected to clear.
  */
 export function findWinningPositions(board: Board, player: Color, ignoreKo: boolean = false): CellIndex[] {
-  // A single-stone win implies there exists a 4-threat (OPEN/HALF/GAP four).
-  // Detect these by scanning existing stones (much faster than trying every empty cell).
+  return getSingleStoneWinningSquares(board, player, ignoreKo ? 'ignoreKo' : 'respectKo');
+}
+
+/**
+ * Single source of truth: squares where placing ONE stone would immediately win (exact-5).
+ *
+ * This is derived by scanning existing stones for 4-threat patterns (OPEN/HALF/GAP four),
+ * which is much faster than trying every empty cell.
+ */
+export function getSingleStoneWinningSquares(
+  board: Board,
+  player: Color,
+  koMode: ThreatKoMode = 'respectKo'
+): CellIndex[] {
+  const ignoreKo = koMode === 'ignoreKo';
   const winning = new Set<CellIndex>();
 
   for (let pos = 0; pos < BOARD_CELLS; pos++) {
@@ -253,13 +272,9 @@ export function findWinningPositions(board: Board, player: Color, ignoreKo: bool
       const pattern = classifyLine(info);
 
       if (pattern === 'OPEN_FOUR' || pattern === 'HALF_FOUR') {
-        for (const e of info.extendPositions) {
-          winning.add(e);
-        }
+        for (const e of info.extendPositions) winning.add(e);
       } else if (pattern === 'GAP_FOUR') {
-        for (const g of info.gapPositions) {
-          winning.add(g);
-        }
+        for (const g of info.gapPositions) winning.add(g);
       }
     }
   }

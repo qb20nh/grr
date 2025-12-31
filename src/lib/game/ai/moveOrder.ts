@@ -125,9 +125,85 @@ class HistoryTable {
   }
 }
 
+/**
+ * Countermove table
+ *
+ * Stores the best known refutation move for a given parent move (by encoded moveCode).
+ * This is a strong, cheap ordering hint at the child node.
+ */
+class CounterMoveTable {
+  private table: Int32Array;
+
+  constructor() {
+    this.table = new Int32Array(HISTORY_TABLE_SIZE);
+    this.table.fill(MOVE_CODE_NONE);
+  }
+
+  set(prevMoveCode: number, replyMoveCode: number): void {
+    if (prevMoveCode === MOVE_CODE_NONE) return;
+    if (replyMoveCode === MOVE_CODE_NONE) return;
+    if (prevMoveCode < 0 || prevMoveCode >= this.table.length) return;
+    this.table[prevMoveCode] = replyMoveCode;
+  }
+
+  get(prevMoveCode: number): number {
+    if (prevMoveCode === MOVE_CODE_NONE) return MOVE_CODE_NONE;
+    if (prevMoveCode < 0 || prevMoveCode >= this.table.length) return MOVE_CODE_NONE;
+    return this.table[prevMoveCode] ?? MOVE_CODE_NONE;
+  }
+
+  clear(): void {
+    this.table.fill(MOVE_CODE_NONE);
+  }
+}
+
+/**
+ * Continuation history (hashed)
+ *
+ * Tracks successful move pairs: (previous move -> current move).
+ * This is a lightweight approximation of Stockfish-style continuation history.
+ */
+const CONT_HIST_SIZE = 1 << 20; // 1,048,576 entries (~4MB int32) - OK for browser worker.
+
+class ContinuationHistoryTable {
+  private table: Int32Array;
+
+  constructor() {
+    this.table = new Int32Array(CONT_HIST_SIZE);
+  }
+
+  private index(prevMoveCode: number, moveCode: number): number {
+    // Mix two 18-bit-ish codes into a 32-bit hash. Keep it cheap and deterministic.
+    const key = (((prevMoveCode * 1315423911) ^ moveCode) >>> 0) & (CONT_HIST_SIZE - 1);
+    return key;
+  }
+
+  update(prevMoveCode: number, moveCode: number, depth: number): void {
+    if (prevMoveCode === MOVE_CODE_NONE) return;
+    if (moveCode === MOVE_CODE_NONE) return;
+    const bonus = depth * depth;
+    const idx = this.index(prevMoveCode, moveCode);
+    const current = this.table[idx];
+    const next = current + bonus;
+    this.table[idx] = next > 0x7fffffff ? 0x7fffffff : next;
+  }
+
+  get(prevMoveCode: number, moveCode: number): number {
+    if (prevMoveCode === MOVE_CODE_NONE) return 0;
+    if (moveCode === MOVE_CODE_NONE) return 0;
+    return this.table[this.index(prevMoveCode, moveCode)] ?? 0;
+  }
+
+  clear(): void {
+    this.table.fill(0);
+  }
+}
+
 // Global instances
 const killerTable = new KillerMoveTable();
 const historyTable = new HistoryTable();
+const counterTable = new CounterMoveTable();
+const continuationTable = new ContinuationHistoryTable();
 
 /**
  * Update killer moves after a beta cutoff
@@ -143,12 +219,24 @@ export function updateHistory(move: Move, depth: number): void {
   historyTable.update(encodeMove(move), depth);
 }
 
+export function updateCounterMove(prevMove: Move | null, reply: Move): void {
+  if (!prevMove) return;
+  counterTable.set(encodeMove(prevMove), encodeMove(reply));
+}
+
+export function updateContinuationHistory(prevMove: Move | null, move: Move, depth: number): void {
+  if (!prevMove) return;
+  continuationTable.update(encodeMove(prevMove), encodeMove(move), depth);
+}
+
 /**
  * Clear all move ordering tables
  */
 export function clearMoveOrdering(): void {
   killerTable.clear();
   historyTable.clear();
+  counterTable.clear();
+  continuationTable.clear();
 }
 
 /**
@@ -165,7 +253,8 @@ export function orderMoves(
   board: Board,
   player: Color,
   depth: number,
-  ttBestMove: Move | null
+  ttBestMove: Move | null,
+  prevMove: Move | null = null
 ): ScoredMove[] {
   // Generate all candidate moves with their base scores
   const moves = generateAllMoves(board, player);
@@ -174,6 +263,8 @@ export function orderMoves(
   const orderedMoves: { move: Move; score: number; orderScore: number }[] = [];
 
   const ttCode = ttBestMove ? encodeMove(ttBestMove) : MOVE_CODE_NONE;
+  const prevCode = prevMove ? encodeMove(prevMove) : MOVE_CODE_NONE;
+  const counterCode = prevCode !== MOVE_CODE_NONE ? counterTable.get(prevCode) : MOVE_CODE_NONE;
   
   for (const { move, score } of moves) {
     const code = encodeMove(move);
@@ -193,9 +284,17 @@ export function orderMoves(
     if (killerTable.isKiller(depth, code)) {
       orderScore += 1000000;
     }
+
+    // Countermove heuristic (best known reply to the parent move)
+    if (counterCode !== MOVE_CODE_NONE && code === counterCode) {
+      orderScore += 1200000;
+    }
     
     // History heuristic
     orderScore += historyTable.get(code);
+
+    // Continuation history (prevMove -> move)
+    orderScore += continuationTable.get(prevCode, code);
     
     orderedMoves.push({ move, score, orderScore });
   }

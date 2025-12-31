@@ -5,11 +5,11 @@
 
 import { CONFIG } from './constants';
 import type { Board, Color, Move, SearchResult, ScoredMove, UndoInfo } from './types';
-import { getOpponent, moveToKey, createReinforceMove, createSingleWinMove } from './utils';
+import { getOpponent, moveToKey, movesEqual, createReinforceMove, createSingleWinMove } from './utils';
 import { makeMove, unmakeMove, getWinnerAfterMove, validateReinforce, getEmptyPositions } from './board';
 import { evaluateSearch, isQuietPosition } from './evaluate';
 import { generateAllMoves, generateTacticalMoves } from './moveGen';
-import { orderMoves, updateKillerMoves, updateHistory, clearMoveOrdering, PVTable, isInterestingMove, getLMRReduction, getFutilityMargin } from './moveOrder';
+import { orderMoves, updateKillerMoves, updateHistory, updateCounterMove, updateContinuationHistory, clearMoveOrdering, PVTable, isInterestingMove, getLMRReduction, getFutilityMargin } from './moveOrder';
 import { getTranspositionTable, TranspositionTable } from './transposition';
 import { hasCriticalThreat } from './threats';
 import { createTimeState, shouldStopSearch } from './timeManager';
@@ -27,6 +27,11 @@ let searchAborted = false;
 interface SearchContext {
   board: Board;
   nnue: NnueState | null;
+  /**
+   * Optional root ordering hint (e.g. from TSS defense refutation). This should
+   * NOT short-circuit search; it only influences move ordering at ply 0.
+   */
+  rootMoveHint: Move | null;
 }
 
 function applyMove(ctx: SearchContext, move: Move, player: Color): UndoInfo {
@@ -159,7 +164,8 @@ function alphaBeta(
   ply: number,
   tt: TranspositionTable,
   pvTable: PVTable,
-  nullMoveAllowed: boolean = true
+  nullMoveAllowed: boolean = true,
+  prevMove: Move | null = null
 ): SearchResult {
   nodesSearched++;
   
@@ -195,6 +201,28 @@ function alphaBeta(
     return !cachedDanger;
   };
 
+  // Razoring: at shallow depth in quiet, non-dangerous positions, if static eval is far below alpha,
+  // skip full move search and go directly to quiescence. This is a forward-pruning optimization.
+  // Guardrails:
+  // - Never at root
+  // - Only at shallow depths
+  // - Only when not under tactical danger (opponent critical threats)
+  // - Only in quiet positions
+  if (
+    ply > 0 &&
+    depth <= 2 &&
+    beta < CONFIG.WIN_SCORE - 1000
+  ) {
+    const staticEval = evaluateSearch(ctx.board, player, ctx.nnue);
+    const razorMargin = depth === 1 ? 500 : 900;
+    if (staticEval + razorMargin <= alpha) {
+      if (isPruningSafe() && isQuietPosition(ctx.board, player)) {
+        const qScore = quiescence(ctx, player, alpha, beta, CONFIG.QUIESCENCE_DEPTH);
+        return { completed: !searchAborted, score: qScore, move: null };
+      }
+    }
+  }
+
   // Null-move pruning (NMP): if even giving the opponent an extra move doesn't prevent us
   // from reaching beta, we can safely prune this branch.
   //
@@ -225,7 +253,8 @@ function alphaBeta(
             ply + 1,
             tt,
             pvTable,
-            false
+            false,
+            null
           );
           const nullScore = -result.score;
 
@@ -243,7 +272,8 @@ function alphaBeta(
   
   // Generate and order moves
   const underCriticalThreat = rootUnderCriticalThreat;
-  let moves = orderMoves(ctx.board, player, ply, ttBestMove);
+  const orderingHint = ply === 0 && ctx.rootMoveHint ? ctx.rootMoveHint : ttBestMove;
+  let moves = orderMoves(ctx.board, player, ply, orderingHint, prevMove);
 
   // Progressive widening at root: start with a smaller set of top moves and expand with depth.
   if (ply === 0) {
@@ -267,8 +297,38 @@ function alphaBeta(
   let bestScore = -CONFIG.INFINITY;
   let flag: 'exact' | 'lower' | 'upper' = 'upper';
   let searchedMoves = 0;
+
+  // Late Move Pruning (LMP) thresholds (very conservative).
+  // Only applies in quiet, safe nodes at shallow depth for non-tactical moves.
+  const lmpLimit =
+    (ply > 0 && depth === 1) ? 12 :
+    (ply > 0 && depth === 2) ? 16 :
+    Infinity;
+  const lmpNodeQuiet = lmpLimit !== Infinity && isPruningSafe() && isQuietPosition(ctx.board, player);
+
+  // Singular-style extension heuristic (very conservative):
+  // If the best move (usually TT-best / strongly ordered) clearly dominates by heuristic score,
+  // extend it by 1 ply to stabilize PV and reduce horizon issues.
+  const singularCandidate =
+    ply > 0 &&
+    depth >= 6 &&
+    !underCriticalThreat &&
+    isPruningSafe() &&
+    ttBestMove !== null &&
+    moves.length >= 2 &&
+    moves[0].score >= moves[1].score + 200000;
   
   for (const { move, score: moveScore } of moves) {
+    // Late Move Pruning: once we've searched enough moves at shallow depth in a quiet node,
+    // prune remaining non-tactical moves.
+    if (searchedMoves >= lmpLimit && lmpNodeQuiet) {
+      const isCapture = move.action === 'rift';
+      const givesCheck = isInterestingMove(ctx.board, move, player, moveScore);
+      if (!isCapture && !givesCheck) {
+        break;
+      }
+    }
+
     const undoInfo = applyMove(ctx, move, player);
     
     let score: number;
@@ -284,8 +344,18 @@ function alphaBeta(
     } else {
       const isCapture = move.action === 'rift';
       const givesCheck = isInterestingMove(ctx.board, move, player, moveScore);
-      // Threat extension: only at the frontier to avoid runaway depth in tactical lines.
-      const extension = depth === 1 && givesCheck ? 1 : 0;
+      // Extensions:
+      // - Threat extension: only at the frontier to avoid runaway depth in tactical lines.
+      // - Singular-style extension: only for a clearly dominant TT best move, in safe/quiet positions.
+      let extension = depth === 1 && givesCheck ? 1 : 0;
+      if (
+        extension === 0 &&
+        searchedMoves === 0 &&
+        singularCandidate &&
+        movesEqual(move, ttBestMove)
+      ) {
+        extension = 1;
+      }
       const fullChildDepth = depth - 1 + extension;
 
       // Futility pruning (very conservative):
@@ -305,7 +375,7 @@ function alphaBeta(
         // Full window search for first move (expected best move)
         const result = alphaBeta(
           ctx, opponent, fullChildDepth,
-          -beta, -alpha, ply + 1, tt, pvTable, true
+          -beta, -alpha, ply + 1, tt, pvTable, true, move
         );
         score = -result.score;
       } else {
@@ -318,7 +388,7 @@ function alphaBeta(
         // Null window search for other moves
         let result = alphaBeta(
           ctx, opponent, reducedDepth,
-          -alpha - 1, -alpha, ply + 1, tt, pvTable, true
+          -alpha - 1, -alpha, ply + 1, tt, pvTable, true, move
         );
         score = -result.score;
 
@@ -326,7 +396,7 @@ function alphaBeta(
         if (reduction > 0 && score > alpha && !searchAborted) {
           result = alphaBeta(
             ctx, opponent, fullChildDepth,
-            -alpha - 1, -alpha, ply + 1, tt, pvTable, true
+            -alpha - 1, -alpha, ply + 1, tt, pvTable, true, move
           );
           score = -result.score;
         }
@@ -335,7 +405,7 @@ function alphaBeta(
         if (score > alpha && score < beta && !searchAborted) {
           result = alphaBeta(
             ctx, opponent, fullChildDepth,
-            -beta, -alpha, ply + 1, tt, pvTable, true
+            -beta, -alpha, ply + 1, tt, pvTable, true, move
           );
           score = -result.score;
         }
@@ -366,6 +436,8 @@ function alphaBeta(
           // Update killer moves and history
           updateKillerMoves(ply, move);
           updateHistory(move, depth);
+          updateCounterMove(prevMove, move);
+          updateContinuationHistory(prevMove, move, depth);
           
           break;
         }
@@ -418,6 +490,11 @@ export function iterativeDeepening(
      * When absent, search falls back to handcrafted evaluation.
      */
     nnueWeights?: NnueWeights | null;
+    /**
+     * Optional root move ordering hint. Used to search a known-good defensive refutation first,
+     * while still allowing alpha-beta to pick a better second stone / line.
+     */
+    rootMoveHint?: Move | null;
   }
 ): SearchResult {
   // Initialize search state
@@ -444,7 +521,7 @@ export function iterativeDeepening(
   }
 
   const nnue = options?.nnueWeights ? NnueState.fromBoard(board, options.nnueWeights) : null;
-  const ctx: SearchContext = { board, nnue };
+  const ctx: SearchContext = { board, nnue, rootMoveHint: options?.rootMoveHint ?? null };
   
   // CRITICAL: Always have a valid move before starting search
   // This guarantees we never return null
@@ -452,6 +529,21 @@ export function iterativeDeepening(
   let bestMoveSoFar: Move | null = allMoves.length > 0 ? allMoves[0].move : null;
   let bestScoreSoFar = allMoves.length > 0 ? allMoves[0].score : 0;
   let bestDepthSoFar = 0;
+
+  // If we have a root ordering hint (e.g. a known-good defensive refutation),
+  // also seed it as "best so far" so that even a depth-1 timeout still plays it.
+  const hinted = options?.rootMoveHint ?? null;
+  if (hinted && bestMoveSoFar !== null) {
+    const match = allMoves.find(m => movesEqual(m.move, hinted));
+    if (match) {
+      bestMoveSoFar = match.move;
+      bestScoreSoFar = match.score;
+    } else {
+      // Hint might be outside the truncated move generator; still prefer it as a safe fallback.
+      bestMoveSoFar = hinted;
+      // Keep bestScoreSoFar as-is (only affects aspiration at depth>1).
+    }
+  }
   
   // If no moves at all (shouldn't happen), return early
   if (bestMoveSoFar === null) {
@@ -642,7 +734,7 @@ class SearchSessionImpl implements SearchSession {
       timeState.canExtend = false;
     }
 
-    const ctx: SearchContext = { board: this.board, nnue: this.nnue };
+    const ctx: SearchContext = { board: this.board, nnue: this.nnue, rootMoveHint: null };
     const baseWindow = 200000;
 
     for (let depth = this.nextDepth; depth <= this.maxDepth; depth++) {
@@ -731,6 +823,7 @@ export function findBestMove(
   maxDepth: number = CONFIG.MAX_DEPTH,
   nnueWeights: NnueWeights | null = null
 ): SearchResult {
+  const startMs = Date.now();
   // Quick check for obvious moves
   
   // 1. Check if we can win immediately
@@ -763,13 +856,15 @@ export function findBestMove(
     }
   }
   
-  function hasImmediateWinningReinforceMoveExhaustive(side: Color): boolean {
-    // Rift cannot create an immediate win for the mover in Gomoku Rift.
-    // Exhaustively check single-stone and two-stone reinforce wins without relying on
-    // truncated move generation heuristics.
+  function hasImmediateWinningSingleStoneMoveExhaustive(side: Color): boolean {
+    // With the colinearity constraint (two reinforce stones cannot be on the same line
+    // unless an opponent stone lies between them), any reinforce win must be attributable
+    // to a SINGLE winning placement. A “two-stone-only” exact-5 is impossible.
+    //
+    // So we only need an exhaustive single-stone win check (Ko-respecting).
     const empties = getEmptyPositions(board); // Ko-respecting
 
-    // 1) Single-stone wins (legal only when they win).
+    // Single-stone wins (legal only when they win).
     for (const pos of empties) {
       const mv = createSingleWinMove(pos);
       const undo = makeMove(board, mv, side);
@@ -778,25 +873,11 @@ export function findBestMove(
       if (winner === side) return true;
     }
 
-    // 2) Two-stone wins.
-    for (let i = 0; i < empties.length; i++) {
-      const a = empties[i];
-      for (let j = i + 1; j < empties.length; j++) {
-        const b = empties[j];
-        if (!validateReinforce(board, a, b, side)) continue;
-        const mv = createReinforceMove(a, b);
-        const undo = makeMove(board, mv, side);
-        const winner = getWinnerAfterMove(board, mv, side);
-        unmakeMove(board, undo, side);
-        if (winner === side) return true;
-      }
-    }
-
     return false;
   }
 
   function opponentHasImmediateWinningMove(): boolean {
-    return hasImmediateWinningReinforceMoveExhaustive(opponent);
+    return hasImmediateWinningSingleStoneMoveExhaustive(opponent);
   }
 
   // 2. Threat Space Search (tactical prover)
@@ -823,7 +904,7 @@ export function findBestMove(
         return true;
       }
 
-      if (hasImmediateWinningReinforceMoveExhaustive(opponent)) {
+      if (hasImmediateWinningSingleStoneMoveExhaustive(opponent)) {
         unmakeMove(board, undo, player);
         return true;
       }
@@ -845,7 +926,16 @@ export function findBestMove(
     return result;
   }
 
-  const tssBudget = Math.max(150, Math.min(2500, Math.floor(timeLimit * 0.4)));
+  const tssBudget =
+    timeLimit > 0
+      ? Math.min(timeLimit, Math.max(150, Math.min(2500, Math.floor(timeLimit * 0.4))))
+      : 2500;
+
+  const getRemainingMs = (): number => {
+    if (timeLimit <= 0) return 0;
+    return timeLimit - (Date.now() - startMs);
+  };
+
   const tssAttack = threatSpaceSearch(board, player, player, {
     timeLimitMs: Math.floor(tssBudget * 0.6),
     maxPlies: 10,
@@ -866,36 +956,69 @@ export function findBestMove(
   // IMPORTANT: In Gomoku Rift, two-stone reinforces can create one-move wins even without
   // classic single-stone win squares (e.g., open-three can be immediate win by placing both ends).
   // So we also probe whether the opponent has a direct winning move.
-  if (hasCriticalThreat(board, opponent) || opponentHasImmediateWinningMove()) {
+  const underCriticalThreat = hasCriticalThreat(board, opponent);
+  const underImmediateThreat = underCriticalThreat || opponentHasImmediateWinningMove();
+  let rootMoveHint: Move | null = null;
+  let rootMoveHintNodes = 0;
+
+  if (underImmediateThreat) {
     const tssDefense = threatSpaceSearch(board, opponent, player, {
-      timeLimitMs: Math.floor(tssBudget * 0.5),
+      timeLimitMs: Math.floor(tssBudget * 0.4),
       maxPlies: 10,
       maxAttackerMoves: 16,
       maxDefenderMoves: 32,
     });
     if (tssDefense.status === 'not_proven' && tssDefense.move) {
-      // Defender found a refutation (within threat-space) - play it.
+      // Defender found a refutation (within threat-space). Use it only as a root ordering hint,
+      // so alpha-beta can still choose a stronger second stone / continuation.
+      rootMoveHint = tssDefense.move;
+      rootMoveHintNodes = tssDefense.nodes;
+
+      // For ultra-tiny budgets, returning the refutation immediately is still valuable.
+      if (timeLimit <= 200) {
+        return sanitizeRootMove({
+          completed: true,
+          score: 0,
+          move: tssDefense.move,
+          depth: 0,
+          nodes: tssDefense.nodes,
+        });
+      }
+    }
+
+    // Under threat: use FULL time and depth for defense (with hint ordering if available).
+    const remainingMs = getRemainingMs();
+    if (timeLimit > 0 && remainingMs <= 0) {
       return sanitizeRootMove({
         completed: true,
         score: 0,
-        move: tssDefense.move,
+        move: rootMoveHint ?? moves[0].move,
         depth: 0,
-        nodes: tssDefense.nodes,
+        nodes: rootMoveHint ? rootMoveHintNodes : 0,
       });
     }
-  }
-  
-  // 3. Check if opponent has critical threat we must respond to
-  if (hasCriticalThreat(board, opponent)) {
-    // Under critical threat - use FULL time and depth for defense
-    // Don't reduce search when defending - we need the best defense!
-    const result = iterativeDeepening(board, player, timeLimit, maxDepth, { preserveMoveOrdering: true, nnueWeights });
-    // iterativeDeepening guarantees a valid move
+
+    const result = iterativeDeepening(board, player, remainingMs, maxDepth, {
+      preserveMoveOrdering: true,
+      nnueWeights,
+      rootMoveHint,
+    });
     return sanitizeRootMove(result);
   }
   
-  // 4. Full search
-  const result = iterativeDeepening(board, player, timeLimit, maxDepth, { preserveMoveOrdering: true, nnueWeights });
+  // Full search
+  const remainingMs = getRemainingMs();
+  if (timeLimit > 0 && remainingMs <= 0) {
+    return sanitizeRootMove({
+      completed: true,
+      score: 0,
+      move: moves[0].move,
+      depth: 0,
+      nodes: 0,
+    });
+  }
+
+  const result = iterativeDeepening(board, player, remainingMs, maxDepth, { preserveMoveOrdering: true, nnueWeights });
   return sanitizeRootMove(result);
 }
 
