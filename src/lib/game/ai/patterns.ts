@@ -212,7 +212,7 @@ export function classifyLine(info: LineInfo): PatternType | null {
     if (gaps === 0) {
       if (openEnds === 2) return 'OPEN_FOUR' as PatternType;
       if (openEnds === 1) return 'HALF_FOUR' as PatternType;
-    } else if (gaps === 1 && openEnds >= 1) {
+    } else if (gaps === 1) {
       return 'GAP_FOUR' as PatternType;
     }
   }

@@ -331,6 +331,15 @@ export function generateTacticalMoves(
   
   // 1. Winning moves
   const winningPositions = findWinningPositions(board, player);
+  if (winningPositions.length > 0) {
+    // Immediate single-stone win is the best tactical move; no need to consider others.
+    return [
+      {
+        move: createSingleWinMove(winningPositions[0]),
+        score: CONFIG.INFINITY,
+      },
+    ];
+  }
   
   // 2. Blocking moves (if opponent has threats)
   const blockingPositions: CellIndex[] = [];

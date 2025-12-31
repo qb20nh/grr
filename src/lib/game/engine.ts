@@ -347,16 +347,96 @@ export function createGameEngine(): GameEngine {
         const { type, move } = e.data;
         
         if (type === 'result') {
-          if (!move) {
+          const failAiMove = (message: string, details?: unknown): void => {
             gameStore.setAiThinking(false);
-            // This should never happen with the improved AI, but handle gracefully
-            console.error('AI could not find a valid move - this is a bug');
+            console.error(message, details);
             // Don't leave game in broken state - switch player so human can continue
             const state = getState();
             if (state.phase === 'playing' && !state.winner) {
               gameStore.switchPlayer();
             }
+          };
+
+          if (!move) {
+            // This should never happen with the improved AI, but handle gracefully
+            failAiMove('AI could not find a valid move - this is a bug');
             return;
+          }
+
+          const state = getState();
+
+          if (!Array.isArray(move.positions)) {
+            failAiMove('[AI] Worker returned malformed move (positions is not an array)', move);
+            return;
+          }
+
+          for (const pos of move.positions) {
+            if (!pos || !Number.isInteger(pos.row) || !Number.isInteger(pos.col)) {
+              failAiMove('[AI] Worker returned malformed move (invalid position)', move);
+              return;
+            }
+          }
+
+          if (move.action === 'reinforce') {
+            const validation = validateReinforceAction(
+              state.board,
+              move.positions,
+              state.currentPlayer,
+              state.lastRiftedPosition
+            );
+            if (!validation.valid) {
+              failAiMove('[AI] Worker returned illegal reinforce move', { move, reason: validation.reason });
+              return;
+            }
+          } else if (move.action === 'rift') {
+            if (move.positions.length !== 1) {
+              failAiMove('[AI] Worker returned illegal rift move (must include exactly one position)', move);
+              return;
+            }
+            const validation = validateRiftAction(state.board, move.positions[0], state.currentPlayer);
+            if (!validation.valid) {
+              failAiMove('[AI] Worker returned illegal rift move', { move, reason: validation.reason });
+              return;
+            }
+          } else {
+            failAiMove('[AI] Worker returned unknown action', move);
+            return;
+          }
+
+          console.log('[AI] Turn computed', {
+            turn: state.moveHistory.length + 1,
+            toMove: state.currentPlayer,
+            aiColor: state.aiColor,
+            action: move.action,
+            positions: move.positions,
+            nodes: move.nodes,
+            depth: move.depth,
+            score: move.score,
+            timeMs: move.time,
+          });
+
+          if (move.ponder) {
+            const tt = move.ponder.tt;
+            console.log('[AI] Ponder impact', {
+              predictedBestOpponentMove: move.ponder.bestMove,
+              predictedHit: move.ponder.predictedHit,
+              usedReplySession: move.ponder.usedReplySession,
+              predictedBestAiReply: move.ponder.replyBestMove,
+              ponderReplyBestDepth: move.ponder.replyBestDepth,
+              ponderReplyBestScore: move.ponder.replyBestScore,
+              ponderReplyNodes: move.ponder.replyNodes,
+              ponderReplyTimeMs: move.ponder.replyTimeMs,
+              predictedMoveKey: move.ponder.predictedMoveKey,
+              ponderNodes: move.ponder.nodes,
+              ponderTimeMs: move.ponder.timeMs,
+              ponderBestDepth: move.ponder.bestDepth,
+              ponderBestScore: move.ponder.bestScore,
+              ttHitsFromPonder: tt.hitsPrevAge,
+              ttHitsTotal: tt.hits,
+              ttReuseFromPonderPct: tt.reuseFromPrevPct,
+              ttHitsCurrentAge: tt.hitsCurrentAge,
+              ttHitsOtherAges: tt.hitsOtherAge,
+            });
           }
 
           if (move.action === 'reinforce' && move.positions.length === 2) {
@@ -402,6 +482,11 @@ export function createGameEngine(): GameEngine {
   }
 
   function startPondering(state: GameState): void {
+    console.log('[AI] Ponder start', {
+      turn: state.moveHistory.length + 1,
+      toMove: state.currentPlayer,
+      aiColor: state.aiColor,
+    });
     postAiMessage({
       type: 'ponderStart',
       state: {
@@ -418,6 +503,7 @@ export function createGameEngine(): GameEngine {
 
   function stopPondering(): void {
     if (!aiWorker) return;
+    console.log('[AI] Ponder stop');
     aiWorker.postMessage({ type: 'ponderStop' });
   }
 
@@ -462,6 +548,11 @@ export function createGameEngine(): GameEngine {
     }
 
     gameStore.setAiThinking(true);
+    console.log('[AI] Thinking...', {
+      turn: state.moveHistory.length + 1,
+      toMove: state.currentPlayer,
+      aiColor: state.aiColor,
+    });
     
     // Use web worker for AI computation
     postAiMessage({

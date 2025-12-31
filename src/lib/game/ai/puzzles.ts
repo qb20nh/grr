@@ -33,6 +33,16 @@ function place(grid: (string | null)[][], color: 'black' | 'white', row: number,
   grid[row][col] = color;
 }
 
+function applyLegacyReinforce(
+  grid: (string | null)[][],
+  color: 'black' | 'white',
+  a: [number, number],
+  b: [number, number]
+): void {
+  place(grid, color, a[0], a[1]);
+  place(grid, color, b[0], b[1]);
+}
+
 function applyMove(board: InternalBoard, move: Move, player: Color): InternalBoard {
   const b = cloneBoard(board);
   makeMove(b, move, player);
@@ -326,6 +336,59 @@ export function runTacticalPuzzles(timeLimitMs: number = 250): PuzzleRunSummary 
         if (winner === WHITE) {
           return { ok: false, details: 'Move should not immediately lose to exact-5 after rift/reinforce.' };
         }
+        return { ok: true };
+      },
+    },
+    {
+      name: 'Regression (GRR1): must-block immediate white win at (5,6)',
+      toMove: BLACK,
+      board: (() => {
+        const g = emptyGrid();
+        // GRR1 replay (black=ai, white=human). Reconstruct position after move 16 (white),
+        // right before black move 17. Black must not allow white to win next move with wR5,6.
+        //
+        // Moves 1..16:
+        applyLegacyReinforce(g, 'black', [6, 7], [8, 6]);   // 1 bR6,7;8,6
+        applyLegacyReinforce(g, 'white', [7, 6], [8, 8]);   // 2 wR7,6;8,8
+        applyLegacyReinforce(g, 'black', [7, 7], [7, 5]);   // 3 bR7,7;7,5
+        applyLegacyReinforce(g, 'white', [8, 7], [8, 5]);   // 4 wR8,7;8,5
+        applyLegacyReinforce(g, 'black', [6, 8], [4, 7]);   // 5 bR6,8;4,7
+        applyLegacyReinforce(g, 'white', [8, 10], [5, 7]);  // 6 wR8,10;5,7
+        applyLegacyReinforce(g, 'black', [5, 9], [6, 6]);   // 7 bR5,9;6,6
+        applyLegacyReinforce(g, 'white', [4, 10], [9, 5]);  // 8 wR4,10;9,5
+        applyLegacyReinforce(g, 'black', [6, 9], [9, 7]);   // 9 bR6,9;9,7
+        applyLegacyReinforce(g, 'white', [6, 10], [6, 5]);  // 10 wR6,10;6,5
+        applyLegacyReinforce(g, 'black', [6, 4], [9, 8]);   // 11 bR6,4;9,8
+        applyLegacyReinforce(g, 'white', [5, 3], [10, 8]);  // 12 wR5,3;10,8
+        applyLegacyReinforce(g, 'black', [9, 3], [9, 9]);   // 13 bR9,3;9,9
+        applyLegacyReinforce(g, 'white', [7, 10], [5, 4]);  // 14 wR7,10;5,4
+        applyLegacyReinforce(g, 'black', [4, 3], [5, 10]);  // 15 bR4,3;5,10
+        applyLegacyReinforce(g, 'white', [8, 11], [5, 5]);  // 16 wR8,11;5,5
+        return g;
+      })(),
+      assert: (board, move) => {
+        const beforeWins = findWinningPositions(board, WHITE);
+        const after = applyMove(board, move, BLACK);
+        const afterWins = findWinningPositions(after, WHITE);
+
+        // In this GRR1 position, White has a fork of immediate single-stone wins (multiple winning squares).
+        // Black can only place two stones, and due to the colinearity constraint it may be impossible to
+        // eliminate all winning squares in one move. So we assert the AI chooses a move that minimizes
+        // the number of immediate winning squares available to White on the next turn.
+        let bestPossible = Infinity;
+        for (const { move: candidate } of generateAllMoves(board, BLACK)) {
+          const candAfter = applyMove(board, candidate, BLACK);
+          const candWins = findWinningPositions(candAfter, WHITE);
+          if (candWins.length < bestPossible) bestPossible = candWins.length;
+        }
+
+        if (afterWins.length !== bestPossible) {
+          return {
+            ok: false,
+            details: `Not best defense. beforeWins=${beforeWins.join(',')} afterWins=${afterWins.join(',')} bestPossible=${bestPossible}`,
+          };
+        }
+
         return { ok: true };
       },
     },

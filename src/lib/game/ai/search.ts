@@ -5,8 +5,8 @@
 
 import { CONFIG } from './constants';
 import type { Board, Color, Move, SearchResult, ScoredMove, UndoInfo } from './types';
-import { getOpponent, moveToKey } from './utils';
-import { makeMove, unmakeMove, getWinnerAfterMove } from './board';
+import { getOpponent, moveToKey, createReinforceMove, createSingleWinMove } from './utils';
+import { makeMove, unmakeMove, getWinnerAfterMove, validateReinforce, getEmptyPositions } from './board';
 import { evaluateSearch, isQuietPosition } from './evaluate';
 import { generateAllMoves, generateTacticalMoves } from './moveGen';
 import { orderMoves, updateKillerMoves, updateHistory, clearMoveOrdering, PVTable, isInterestingMove, getLMRReduction, getFutilityMargin } from './moveOrder';
@@ -763,15 +763,40 @@ export function findBestMove(
     }
   }
   
-  function opponentHasImmediateWinningMove(): boolean {
-    const oppMoves = generateAllMoves(board, opponent);
-    for (const { move } of oppMoves) {
-      const undo = makeMove(board, move, opponent);
-      const winner = getWinnerAfterMove(board, move, opponent);
-      unmakeMove(board, undo, opponent);
-      if (winner === opponent) return true;
+  function hasImmediateWinningReinforceMoveExhaustive(side: Color): boolean {
+    // Rift cannot create an immediate win for the mover in Gomoku Rift.
+    // Exhaustively check single-stone and two-stone reinforce wins without relying on
+    // truncated move generation heuristics.
+    const empties = getEmptyPositions(board); // Ko-respecting
+
+    // 1) Single-stone wins (legal only when they win).
+    for (const pos of empties) {
+      const mv = createSingleWinMove(pos);
+      const undo = makeMove(board, mv, side);
+      const winner = getWinnerAfterMove(board, mv, side);
+      unmakeMove(board, undo, side);
+      if (winner === side) return true;
     }
+
+    // 2) Two-stone wins.
+    for (let i = 0; i < empties.length; i++) {
+      const a = empties[i];
+      for (let j = i + 1; j < empties.length; j++) {
+        const b = empties[j];
+        if (!validateReinforce(board, a, b, side)) continue;
+        const mv = createReinforceMove(a, b);
+        const undo = makeMove(board, mv, side);
+        const winner = getWinnerAfterMove(board, mv, side);
+        unmakeMove(board, undo, side);
+        if (winner === side) return true;
+      }
+    }
+
     return false;
+  }
+
+  function opponentHasImmediateWinningMove(): boolean {
+    return hasImmediateWinningReinforceMoveExhaustive(opponent);
   }
 
   // 2. Threat Space Search (tactical prover)
@@ -798,15 +823,9 @@ export function findBestMove(
         return true;
       }
 
-      const oppMoves = generateAllMoves(board, opponent);
-      for (const { move } of oppMoves) {
-        const u2 = makeMove(board, move, opponent);
-        const winner = getWinnerAfterMove(board, move, opponent);
-        unmakeMove(board, u2, opponent);
-        if (winner === opponent) {
-          unmakeMove(board, undo, player);
-          return true;
-        }
+      if (hasImmediateWinningReinforceMoveExhaustive(opponent)) {
+        unmakeMove(board, undo, player);
+        return true;
       }
 
       unmakeMove(board, undo, player);

@@ -124,8 +124,4 @@
     border-color: var(--accent);
     color: var(--accent);
   }
-
-  .btn-sm.muted {
-    color: var(--text-secondary);
-  }
 </style>

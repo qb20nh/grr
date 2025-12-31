@@ -24,6 +24,9 @@ export class TranspositionTable {
   private hits: number;
   private misses: number;
   private collisions: number;
+  private hitsCurrentAge: number;
+  private hitsPrevAge: number;
+  private hitsOtherAge: number;
   
   constructor(size: number = CONFIG.TT_SIZE) {
     if (size <= 0 || (size & (size - 1)) !== 0) {
@@ -42,6 +45,21 @@ export class TranspositionTable {
     this.hits = 0;
     this.misses = 0;
     this.collisions = 0;
+    this.hitsCurrentAge = 0;
+    this.hitsPrevAge = 0;
+    this.hitsOtherAge = 0;
+  }
+
+  private countHit(storedAge: number): void {
+    this.hits++;
+    const prevAge = (this.currentAge - 1) & 0xffff;
+    if (storedAge === this.currentAge) {
+      this.hitsCurrentAge++;
+    } else if (storedAge === prevAge) {
+      this.hitsPrevAge++;
+    } else {
+      this.hitsOtherAge++;
+    }
   }
   
   /**
@@ -72,7 +90,7 @@ export class TranspositionTable {
       return null;
     }
     
-    this.hits++;
+    this.countHit(this.ages[index]);
     return {
       hash,
       depth: storedDepth,
@@ -163,7 +181,7 @@ export class TranspositionTable {
       return [false, 0, null];
     }
 
-    this.hits++;
+    this.countHit(this.ages[index]);
 
     const bestMove = decodeMove(this.moves[index]);
 
@@ -199,6 +217,10 @@ export class TranspositionTable {
   newSearch(): void {
     // uint16 wrap is fine; age is only compared relative to currentAge.
     this.currentAge = (this.currentAge + 1) & 0xffff;
+  }
+
+  getCurrentAge(): number {
+    return this.currentAge;
   }
   
   /**
@@ -241,6 +263,29 @@ export class TranspositionTable {
     this.hits = 0;
     this.misses = 0;
     this.collisions = 0;
+    this.hitsCurrentAge = 0;
+    this.hitsPrevAge = 0;
+    this.hitsOtherAge = 0;
+  }
+
+  getProbeStats(): {
+    currentAge: number;
+    hits: number;
+    misses: number;
+    collisions: number;
+    hitsCurrentAge: number;
+    hitsPrevAge: number;
+    hitsOtherAge: number;
+  } {
+    return {
+      currentAge: this.currentAge,
+      hits: this.hits,
+      misses: this.misses,
+      collisions: this.collisions,
+      hitsCurrentAge: this.hitsCurrentAge,
+      hitsPrevAge: this.hitsPrevAge,
+      hitsOtherAge: this.hitsOtherAge,
+    };
   }
 }
 
