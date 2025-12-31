@@ -256,16 +256,17 @@ function generateDefenderReplies(
       const info = scanLine(board, pos, dir, attacker, true);
       const pattern = classifyLine(info);
 
-      let wins: CellIndex[] | null = null;
+      let hits = false;
       if (pattern === 'OPEN_FOUR' || pattern === 'HALF_FOUR') {
-        wins = info.extendPositions;
+        if (info.extendCount >= 1 && threatSet.has(info.extend1)) hits = true;
+        else if (info.extendCount >= 2 && threatSet.has(info.extend2)) hits = true;
       } else if (pattern === 'GAP_FOUR') {
-        wins = info.gapPositions;
+        if (info.gaps === 1 && threatSet.has(info.gapPos)) hits = true;
       } else {
         continue;
       }
 
-      if (wins.some(w => threatSet.has(w))) {
+      if (hits) {
         riftCandidates.add(pos);
         break;
       }

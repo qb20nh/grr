@@ -111,7 +111,7 @@ class HistoryTable {
   get(moveCode: number): number {
     if (moveCode === MOVE_CODE_NONE) return 0;
     if (moveCode < 0 || moveCode >= this.table.length) return 0;
-    return this.table[moveCode] ?? 0;
+    return this.table[moveCode];
   }
   
   /**
@@ -149,7 +149,7 @@ class CounterMoveTable {
   get(prevMoveCode: number): number {
     if (prevMoveCode === MOVE_CODE_NONE) return MOVE_CODE_NONE;
     if (prevMoveCode < 0 || prevMoveCode >= this.table.length) return MOVE_CODE_NONE;
-    return this.table[prevMoveCode] ?? MOVE_CODE_NONE;
+    return this.table[prevMoveCode];
   }
 
   clear(): void {
@@ -191,7 +191,7 @@ class ContinuationHistoryTable {
   get(prevMoveCode: number, moveCode: number): number {
     if (prevMoveCode === MOVE_CODE_NONE) return 0;
     if (moveCode === MOVE_CODE_NONE) return 0;
-    return this.table[this.index(prevMoveCode, moveCode)] ?? 0;
+    return this.table[this.index(prevMoveCode, moveCode)];
   }
 
   clear(): void {
@@ -258,15 +258,14 @@ export function orderMoves(
 ): ScoredMove[] {
   // Generate all candidate moves with their base scores
   const moves = generateAllMoves(board, player);
-  
-  // Calculate ordering score for each move
-  const orderedMoves: { move: Move; score: number; orderScore: number }[] = [];
 
   const ttCode = ttBestMove ? encodeMove(ttBestMove) : MOVE_CODE_NONE;
   const prevCode = prevMove ? encodeMove(prevMove) : MOVE_CODE_NONE;
   const counterCode = prevCode !== MOVE_CODE_NONE ? counterTable.get(prevCode) : MOVE_CODE_NONE;
   
-  for (const { move, score } of moves) {
+  for (const m of moves) {
+    const move = m.move;
+    const score = m.score;
     const code = encodeMove(move);
     let orderScore = score;
     
@@ -296,14 +295,12 @@ export function orderMoves(
     // Continuation history (prevMove -> move)
     orderScore += continuationTable.get(prevCode, code);
     
-    orderedMoves.push({ move, score, orderScore });
+    m.orderScore = orderScore;
   }
   
-  // Sort by order score
-  orderedMoves.sort((a, b) => b.orderScore - a.orderScore);
-  
-  // Return as ScoredMove array (using original score, not orderScore)
-  return orderedMoves.map(m => ({ move: m.move, score: m.score }));
+  // Sort by order score (fall back to base score if absent).
+  moves.sort((a, b) => (b.orderScore! - a.orderScore!));
+  return moves;
 }
 
 /**

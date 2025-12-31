@@ -14,6 +14,13 @@
 
 import { runTacticalPuzzles } from '../src/lib/game/ai/puzzles.ts';
 import { runNpsBenchmark } from '../src/lib/game/ai/benchmark.ts';
+import { clearMoveOrdering } from '../src/lib/game/ai/moveOrder.ts';
+import { clearTranspositionTable } from '../src/lib/game/ai/transposition.ts';
+
+declare const process: {
+  argv: string[];
+  exit(code?: number): never;
+};
 
 type ArgValue = string | boolean;
 type ArgMap = Map<string, ArgValue>;
@@ -71,6 +78,7 @@ Options:
   --time <n>          Alias for --timeLimitMs
   --json              Print JSON summary
   --benchmark         Also run nodes/sec benchmark (does not affect exit code)
+  --benchClean        Clear TT + move ordering before running the benchmark (default: false)
   --benchTimeMs <n>   Benchmark time per position (default: 200)
   --benchDepth <n>    Benchmark max depth (default: 10)
   --benchIters <n>    Benchmark iterations (default: 3)
@@ -116,9 +124,15 @@ async function main(): Promise<number> {
   }
 
   if (runBench) {
+    const benchClean = getFlag(args, '--benchClean');
     const benchTimeMs = getNumber(args, '--benchTimeMs', 200);
     const benchDepth = getNumber(args, '--benchDepth', 10);
     const benchIters = getNumber(args, '--benchIters', 3);
+
+    if (benchClean) {
+      clearMoveOrdering();
+      clearTranspositionTable();
+    }
 
     const bench = runNpsBenchmark({
       timeLimitMs: benchTimeMs,

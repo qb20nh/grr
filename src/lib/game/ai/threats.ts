@@ -52,12 +52,9 @@ export function getBlockingMask(board: Board, player: Color, ignoreKo: boolean =
         pattern !== 'OPEN_THREE'
       ) continue;
 
-      for (const e of info.extendPositions) {
-        BLOCK_MASK[e] = stamp;
-      }
-      for (const g of info.gapPositions) {
-        BLOCK_MASK[g] = stamp;
-      }
+      if (info.extendCount >= 1 && info.extend1 >= 0) BLOCK_MASK[info.extend1] = stamp;
+      if (info.extendCount >= 2 && info.extend2 >= 0) BLOCK_MASK[info.extend2] = stamp;
+      if (info.gaps === 1 && info.gapPos >= 0) BLOCK_MASK[info.gapPos] = stamp;
     }
   }
 
@@ -77,8 +74,20 @@ const FORK_OFFSETS: readonly [number, number][] = (() => {
   return out;
 })();
 
+// Fork-candidate de-dup stamp (avoid per-call Uint8Array allocations).
+const FORK_SEEN = new Uint32Array(BOARD_CELLS);
+let forkStamp = 1;
+function nextForkStamp(): number {
+  forkStamp = (forkStamp + 1) >>> 0;
+  if (forkStamp === 0) {
+    FORK_SEEN.fill(0);
+    forkStamp = 1;
+  }
+  return forkStamp;
+}
+
 function forkCandidates(board: Board): CellIndex[] {
-  const seen = new Uint8Array(BOARD_CELLS);
+  const stamp = nextForkStamp();
   const out: CellIndex[] = [];
 
   for (let pos = 0; pos < BOARD_CELLS; pos++) {
@@ -93,8 +102,8 @@ function forkCandidates(board: Board): CellIndex[] {
       const idx = r * 15 + c;
       if (board.cells[idx] !== EMPTY) continue;
       if (board.koPosition === idx) continue;
-      if (seen[idx]) continue;
-      seen[idx] = 1;
+      if (FORK_SEEN[idx] === stamp) continue;
+      FORK_SEEN[idx] = stamp;
       out.push(idx);
     }
   }
@@ -262,7 +271,15 @@ export function getSingleStoneWinningSquares(
   koMode: ThreatKoMode = 'respectKo'
 ): CellIndex[] {
   const ignoreKo = koMode === 'ignoreKo';
-  const winning = new Set<CellIndex>();
+  const stamp = nextWinStamp();
+  const out: CellIndex[] = [];
+
+  const add = (idx: CellIndex): void => {
+    if (idx < 0) return;
+    if (WIN_MASK[idx] === stamp) return;
+    WIN_MASK[idx] = stamp;
+    out.push(idx);
+  };
 
   for (let pos = 0; pos < BOARD_CELLS; pos++) {
     if (board.cells[pos] !== player) continue;
@@ -272,14 +289,27 @@ export function getSingleStoneWinningSquares(
       const pattern = classifyLine(info);
 
       if (pattern === 'OPEN_FOUR' || pattern === 'HALF_FOUR') {
-        for (const e of info.extendPositions) winning.add(e);
+        if (info.extendCount >= 1) add(info.extend1);
+        if (info.extendCount >= 2) add(info.extend2);
       } else if (pattern === 'GAP_FOUR') {
-        for (const g of info.gapPositions) winning.add(g);
+        if (info.gaps === 1) add(info.gapPos);
       }
     }
   }
 
-  return Array.from(winning);
+  return out;
+}
+
+// ---- winning-square de-dup stamp ----
+const WIN_MASK = new Uint32Array(BOARD_CELLS);
+let winStamp = 1;
+function nextWinStamp(): number {
+  winStamp = (winStamp + 1) >>> 0;
+  if (winStamp === 0) {
+    WIN_MASK.fill(0);
+    winStamp = 1;
+  }
+  return winStamp;
 }
 
 /**

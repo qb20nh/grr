@@ -15,10 +15,49 @@ export interface LineInfo {
   count: number;          // Consecutive stones of player
   openEnds: number;       // 0, 1, or 2 open ends
   gaps: number;           // Number of gaps within potential 5
-  gapPositions: CellIndex[]; // Positions of gaps
-  extendPositions: CellIndex[]; // Positions that would extend the line
-  blockedByOpponent: boolean;
-  blockedByEdge: boolean;
+  /**
+   * For GAP_* patterns this is the single gap cell (0..224). Otherwise -1.
+   * (We keep it scalar to avoid per-call array allocations in this hot path.)
+   */
+  gapPos: CellIndex; // -1 when none
+  /** Number of extend squares (0..2). */
+  extendCount: number;
+  extend1: CellIndex; // -1 when absent
+  extend2: CellIndex; // -1 when absent
+}
+
+const NO_POS: CellIndex = -1;
+
+function rankFor(count: number, openEnds: number, gaps: number): number {
+  // Exactly 5 = win
+  if (count === 5 && gaps === 0) return 9; // FIVE
+  // Overline (6+) is not a win
+  if (count > 5) return 0;
+
+  if (count === 4) {
+    if (gaps === 0) {
+      if (openEnds === 2) return 8; // OPEN_FOUR
+      if (openEnds === 1) return 6; // HALF_FOUR
+    } else if (gaps === 1) {
+      return 7; // GAP_FOUR
+    }
+  }
+
+  if (count === 3) {
+    if (gaps === 0) {
+      if (openEnds === 2) return 5; // OPEN_THREE
+      if (openEnds === 1) return 3; // HALF_THREE
+    } else if (gaps === 1 && openEnds >= 1) {
+      return 4; // GAP_THREE
+    }
+  }
+
+  if (count === 2 && gaps === 0) {
+    if (openEnds === 2) return 2; // OPEN_TWO
+    if (openEnds === 1) return 1; // HALF_TWO
+  }
+
+  return 0;
 }
 
 /**
@@ -49,7 +88,7 @@ export function scanLine(
     let r = startRow + dr;
     let c = startCol + dc;
 
-    while (inBounds(r, c) && board.cells[toIndex(r, c)] === player && count < maxRun) {
+    while (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE && board.cells[r * BOARD_SIZE + c] === player && count < maxRun) {
       count++;
       r += dr;
       c += dc;
@@ -61,134 +100,149 @@ export function scanLine(
   const left = scanConsecutive(-dRow, -dCol);
   const right = scanConsecutive(dRow, dCol);
 
-  const leftEndIdx = inBounds(left.endRow, left.endCol) ? toIndex(left.endRow, left.endCol) : null;
-  const rightEndIdx = inBounds(right.endRow, right.endCol) ? toIndex(right.endRow, right.endCol) : null;
+  const leftEndIdx = inBounds(left.endRow, left.endCol) ? toIndex(left.endRow, left.endCol) : NO_POS;
+  const rightEndIdx = inBounds(right.endRow, right.endCol) ? toIndex(right.endRow, right.endCol) : NO_POS;
 
-  const baseExtend: CellIndex[] = [];
-  const leftOpen = leftEndIdx !== null && isOpenForPlacement(leftEndIdx);
-  const rightOpen = rightEndIdx !== null && isOpenForPlacement(rightEndIdx);
-  const baseOpenEnds = (leftOpen ? 1 : 0) + (rightOpen ? 1 : 0);
+  const leftOpen = leftEndIdx !== NO_POS && isOpenForPlacement(leftEndIdx);
+  const rightOpen = rightEndIdx !== NO_POS && isOpenForPlacement(rightEndIdx);
 
-  if (leftOpen && leftEndIdx !== null) baseExtend.push(leftEndIdx);
-  if (rightOpen && rightEndIdx !== null) baseExtend.push(rightEndIdx);
+  // Base (no gap) variant.
+  let bestCount = left.count + 1 + right.count;
+  let bestOpenEnds = (leftOpen ? 1 : 0) + (rightOpen ? 1 : 0);
+  let bestGaps = 0;
+  let bestGapPos: CellIndex = NO_POS;
+  let bestExtendCount = 0;
+  let bestExtend1: CellIndex = NO_POS;
+  let bestExtend2: CellIndex = NO_POS;
 
-  const baseInfo: LineInfo = {
-    count: left.count + 1 + right.count,
-    openEnds: baseOpenEnds,
-    gaps: 0,
-    gapPositions: [],
-    extendPositions: baseExtend,
-    blockedByOpponent: false,
-    blockedByEdge: false,
-  };
+  if (leftOpen) {
+    bestExtend1 = leftEndIdx;
+    bestExtendCount = 1;
+  }
+  if (rightOpen) {
+    if (bestExtendCount === 0) {
+      bestExtend1 = rightEndIdx;
+      bestExtendCount = 1;
+    } else if (rightEndIdx !== bestExtend1) {
+      bestExtend2 = rightEndIdx;
+      bestExtendCount = 2;
+    }
+  }
 
-  // Gap variants: allow a single empty (gap) followed by more stones.
-  const variants: LineInfo[] = [baseInfo];
+  let bestRank = rankFor(bestCount, bestOpenEnds, bestGaps);
 
   // Right-gap: ... [stones] _ [stones]
-  if (rightEndIdx !== null && isOpenForPlacement(rightEndIdx)) {
+  if (rightOpen) {
     const gapRow = right.endRow;
     const gapCol = right.endCol;
     const afterGapRow = gapRow + dRow;
     const afterGapCol = gapCol + dCol;
 
-    if (inBounds(afterGapRow, afterGapCol) && board.cells[toIndex(afterGapRow, afterGapCol)] === player) {
+    if (inBounds(afterGapRow, afterGapCol) && board.cells[afterGapRow * BOARD_SIZE + afterGapCol] === player) {
       // Count stones after the gap
       let afterCount = 1;
       let r = afterGapRow + dRow;
       let c = afterGapCol + dCol;
-      while (inBounds(r, c) && board.cells[toIndex(r, c)] === player && afterCount < maxRun) {
+      while (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE && board.cells[r * BOARD_SIZE + c] === player && afterCount < maxRun) {
         afterCount++;
         r += dRow;
         c += dCol;
       }
 
-      const farEndIdx = inBounds(r, c) ? toIndex(r, c) : null;
-      const extend: CellIndex[] = [];
-      if (leftOpen && leftEndIdx !== null) extend.push(leftEndIdx);
-      if (farEndIdx !== null && isOpenForPlacement(farEndIdx) && farEndIdx !== leftEndIdx) {
-        extend.push(farEndIdx);
-      }
+      const farEndIdx = inBounds(r, c) ? toIndex(r, c) : NO_POS;
+      const farOpen = farEndIdx !== NO_POS && isOpenForPlacement(farEndIdx);
 
-      variants.push({
-        count: left.count + 1 + right.count + afterCount,
-        openEnds:
-          (leftOpen ? 1 : 0) +
-          (farEndIdx !== null && isOpenForPlacement(farEndIdx) ? 1 : 0),
-        gaps: 1,
-        gapPositions: [rightEndIdx],
-        extendPositions: extend,
-        blockedByOpponent: false,
-        blockedByEdge: false,
-      });
+      const vCount = bestCount + afterCount;
+      const vOpenEnds = (leftOpen ? 1 : 0) + (farOpen ? 1 : 0);
+      const vRank = rankFor(vCount, vOpenEnds, 1);
+
+      if (vRank > bestRank || (vRank === bestRank && vCount > bestCount)) {
+        bestRank = vRank;
+        bestCount = vCount;
+        bestOpenEnds = vOpenEnds;
+        bestGaps = 1;
+        bestGapPos = rightEndIdx;
+        bestExtendCount = 0;
+        bestExtend1 = NO_POS;
+        bestExtend2 = NO_POS;
+
+        if (leftOpen) {
+          bestExtend1 = leftEndIdx;
+          bestExtendCount = 1;
+        }
+        if (farOpen) {
+          if (bestExtendCount === 0) {
+            bestExtend1 = farEndIdx;
+            bestExtendCount = 1;
+          } else if (farEndIdx !== bestExtend1) {
+            bestExtend2 = farEndIdx;
+            bestExtendCount = 2;
+          }
+        }
+      }
     }
   }
 
   // Left-gap: [stones] _ [stones] ...
-  if (leftEndIdx !== null && isOpenForPlacement(leftEndIdx)) {
+  if (leftOpen) {
     const gapRow = left.endRow;
     const gapCol = left.endCol;
     const afterGapRow = gapRow - dRow;
     const afterGapCol = gapCol - dCol;
 
-    if (inBounds(afterGapRow, afterGapCol) && board.cells[toIndex(afterGapRow, afterGapCol)] === player) {
+    if (inBounds(afterGapRow, afterGapCol) && board.cells[afterGapRow * BOARD_SIZE + afterGapCol] === player) {
       let afterCount = 1;
       let r = afterGapRow - dRow;
       let c = afterGapCol - dCol;
-      while (inBounds(r, c) && board.cells[toIndex(r, c)] === player && afterCount < maxRun) {
+      while (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE && board.cells[r * BOARD_SIZE + c] === player && afterCount < maxRun) {
         afterCount++;
         r -= dRow;
         c -= dCol;
       }
 
-      const farEndIdx = inBounds(r, c) ? toIndex(r, c) : null;
-      const extend: CellIndex[] = [];
-      if (farEndIdx !== null && isOpenForPlacement(farEndIdx)) extend.push(farEndIdx);
-      if (rightOpen && rightEndIdx !== null && rightEndIdx !== farEndIdx) extend.push(rightEndIdx);
+      const farEndIdx = inBounds(r, c) ? toIndex(r, c) : NO_POS;
+      const farOpen = farEndIdx !== NO_POS && isOpenForPlacement(farEndIdx);
 
-      variants.push({
-        count: left.count + 1 + right.count + afterCount,
-        openEnds:
-          (farEndIdx !== null && isOpenForPlacement(farEndIdx) ? 1 : 0) +
-          (rightOpen ? 1 : 0),
-        gaps: 1,
-        gapPositions: [leftEndIdx],
-        extendPositions: extend,
-        blockedByOpponent: false,
-        blockedByEdge: false,
-      });
+      const vCount = bestCount + afterCount;
+      const vOpenEnds = (farOpen ? 1 : 0) + (rightOpen ? 1 : 0);
+      const vRank = rankFor(vCount, vOpenEnds, 1);
+
+      if (vRank > bestRank || (vRank === bestRank && vCount > bestCount)) {
+        bestRank = vRank;
+        bestCount = vCount;
+        bestOpenEnds = vOpenEnds;
+        bestGaps = 1;
+        bestGapPos = leftEndIdx;
+        bestExtendCount = 0;
+        bestExtend1 = NO_POS;
+        bestExtend2 = NO_POS;
+
+        if (farOpen) {
+          bestExtend1 = farEndIdx;
+          bestExtendCount = 1;
+        }
+        if (rightOpen && rightEndIdx !== NO_POS) {
+          if (bestExtendCount === 0) {
+            bestExtend1 = rightEndIdx;
+            bestExtendCount = 1;
+          } else if (rightEndIdx !== bestExtend1) {
+            bestExtend2 = rightEndIdx;
+            bestExtendCount = 2;
+          }
+        }
+      }
     }
   }
 
-  // Choose the variant that yields the best pattern classification.
-  const rank: Record<string, number> = {
-    FIVE: 9,
-    OPEN_FOUR: 8,
-    GAP_FOUR: 7,
-    HALF_FOUR: 6,
-    OPEN_THREE: 5,
-    GAP_THREE: 4,
-    HALF_THREE: 3,
-    OPEN_TWO: 2,
-    HALF_TWO: 1,
+  return {
+    count: bestCount,
+    openEnds: bestOpenEnds,
+    gaps: bestGaps,
+    gapPos: bestGapPos,
+    extendCount: bestExtendCount,
+    extend1: bestExtend1,
+    extend2: bestExtend2,
   };
-
-  let best = variants[0];
-  let bestRank = rank[String(classifyLine(best))] ?? 0;
-
-  for (let i = 1; i < variants.length; i++) {
-    const v = variants[i];
-    const vRank = rank[String(classifyLine(v))] ?? 0;
-    if (vRank > bestRank) {
-      best = v;
-      bestRank = vRank;
-    } else if (vRank === bestRank && v.count > best.count) {
-      // Tie-breaker: prefer higher stone count (helps move ordering heuristics)
-      best = v;
-    }
-  }
-
-  return best;
 }
 
 /**
@@ -252,9 +306,8 @@ export function countPatterns(board: Board, player: Color): PatternCounts {
     GAP_THREE: 0,
   };
   
-  // Track which lines we've already counted.
-  // Use numeric keys to avoid string allocations in this hot path.
-  const counted = new Set<number>();
+  // Track which lines we've already counted (allocation-free stamp mask).
+  const stamp = nextCountedStamp();
   
   for (let pos = 0; pos < BOARD_CELLS; pos++) {
     if (board.cells[pos] !== player) continue;
@@ -277,10 +330,10 @@ export function countPatterns(board: Board, player: Color): PatternCounts {
       if (
         (pattern === 'GAP_FOUR' || pattern === 'GAP_THREE') &&
         info.gaps === 1 &&
-        info.gapPositions.length > 0
+        info.gapPos !== NO_POS
       ) {
         // Gap-key namespace starts after contiguous line keys.
-        lineKey = BOARD_CELLS * 4 + info.gapPositions[0] * 4 + dir;
+        lineKey = BOARD_CELLS * 4 + info.gapPos * 4 + dir;
       } else {
         // Find start of contiguous line
         let startR = row, startC = col;
@@ -294,14 +347,26 @@ export function countPatterns(board: Board, player: Color): PatternCounts {
         const startIdx = toIndex(startR, startC);
         lineKey = startIdx * 4 + dir;
       }
-      if (counted.has(lineKey)) continue;
-      counted.add(lineKey);
+      if (COUNTED_LINES[lineKey] === stamp) continue;
+      COUNTED_LINES[lineKey] = stamp;
 
       counts[pattern as keyof PatternCounts]++;
     }
   }
   
   return counts;
+}
+
+// ---- countPatterns de-dup stamp (0..(BOARD_CELLS*8-1)) ----
+const COUNTED_LINES = new Uint32Array(BOARD_CELLS * 8);
+let countedStamp = 1;
+function nextCountedStamp(): number {
+  countedStamp = (countedStamp + 1) >>> 0;
+  if (countedStamp === 0) {
+    COUNTED_LINES.fill(0);
+    countedStamp = 1;
+  }
+  return countedStamp;
 }
 
 /**

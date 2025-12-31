@@ -48,6 +48,11 @@ export type Move = ReinforceMove | SingleWinMove | RiftMove;
 export interface ScoredMove {
   move: Move;
   score: number;
+  /**
+   * Optional ordering score used by `orderMoves`. When absent, callers should fall back to `score`.
+   * Kept on the object to avoid per-node allocation of parallel arrays during search.
+   */
+  orderScore?: number;
 }
 
 // Undo information for make/unmake

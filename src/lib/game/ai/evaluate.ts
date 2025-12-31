@@ -37,15 +37,13 @@ function calculateForkBonus(board: Board, player: Color): number {
   let bonus = 0;
   
   for (const fork of forks) {
-    // Classify fork type
-    const hasFour = fork.threats.some(t => 
-      t === 'OPEN_FOUR' || t === 'GAP_FOUR' || t === 'HALF_FOUR'
-    );
-    const hasOpenThree = fork.threats.some(t => t === 'OPEN_THREE');
-    const fourCount = fork.threats.filter(t => 
-      t === 'OPEN_FOUR' || t === 'GAP_FOUR' || t === 'HALF_FOUR'
-    ).length;
-    const threeCount = fork.threats.filter(t => t === 'OPEN_THREE').length;
+    // Classify fork type (allocation-free; avoid .filter()/.some() arrays)
+    let fourCount = 0;
+    let threeCount = 0;
+    for (const t of fork.threats) {
+      if (t === 'OPEN_FOUR' || t === 'GAP_FOUR' || t === 'HALF_FOUR') fourCount++;
+      else if (t === 'OPEN_THREE') threeCount++;
+    }
     
     if (fourCount >= 2) {
       bonus += FORK_BONUS.DOUBLE_FOUR;

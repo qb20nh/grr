@@ -64,6 +64,18 @@ function pairKey(a: CellIndex, b: CellIndex): number {
   return min * BOARD_CELLS + max;
 }
 
+// Critical-block membership scratch (avoid Set allocations in hot paths).
+const CRITICAL_BLOCK_SEEN = new Uint32Array(BOARD_CELLS);
+let criticalBlockStamp = 1;
+function nextCriticalBlockStamp(): number {
+  criticalBlockStamp = (criticalBlockStamp + 1) >>> 0;
+  if (criticalBlockStamp === 0) {
+    CRITICAL_BLOCK_SEEN.fill(0);
+    criticalBlockStamp = 1;
+  }
+  return criticalBlockStamp;
+}
+
 /**
  * Get candidate positions near existing stones
  */
@@ -157,6 +169,7 @@ export function generateReinforceMoves(
     moves.push({
       move: createSingleWinMove(winPos),
       score: CONFIG.INFINITY,
+      orderScore: CONFIG.INFINITY,
     });
     // Return immediately - no need to search further
     return moves;
@@ -170,13 +183,18 @@ export function generateReinforceMoves(
   
   // If opponent can win next turn, blocking is MANDATORY
   // Blocking positions should include the opponent's winning squares
-  const criticalBlocks = new Set<CellIndex>(blockingPositions);
+  const cStamp = nextCriticalBlockStamp();
+  const criticalBlockArray: CellIndex[] = [];
+  const addCritical = (pos: CellIndex): void => {
+    if (CRITICAL_BLOCK_SEEN[pos] === cStamp) return;
+    CRITICAL_BLOCK_SEEN[pos] = cStamp;
+    criticalBlockArray.push(pos);
+  };
+  for (const pos of blockingPositions) addCritical(pos);
   for (const pos of opponentWinPositions) {
-    if (isValidPlacement(board, pos)) {
-      criticalBlocks.add(pos);
-    }
+    if (isValidPlacement(board, pos)) addCritical(pos);
   }
-  const criticalBlockArray = Array.from(criticalBlocks);
+  const isCritical = (pos: CellIndex): boolean => CRITICAL_BLOCK_SEEN[pos] === cStamp;
   
   // If we must block, generate blocking moves first with huge priority
   if (mustBlock && criticalBlockArray.length > 0) {
@@ -194,6 +212,7 @@ export function generateReinforceMoves(
         moves.push({
           move: createReinforceMove(blockPos, blockPos2),
           score: score + 500000, // HUGE bonus for double block
+          orderScore: score + 500000,
         });
       }
       
@@ -206,6 +225,7 @@ export function generateReinforceMoves(
         moves.push({
           move: createReinforceMove(blockPos, cand.pos),
           score: score + 300000, // Large bonus for blocking
+          orderScore: score + 300000,
         });
       }
     }
@@ -227,12 +247,13 @@ export function generateReinforceMoves(
       
       // Bonus if one or both are blocking moves
       let finalScore = score;
-      if (criticalBlocks.has(pos1)) finalScore += mustBlock ? 200000 : 20000;
-      if (criticalBlocks.has(pos2)) finalScore += mustBlock ? 200000 : 20000;
+      if (isCritical(pos1)) finalScore += mustBlock ? 200000 : 20000;
+      if (isCritical(pos2)) finalScore += mustBlock ? 200000 : 20000;
       
       moves.push({
         move: createReinforceMove(pos1, pos2),
         score: finalScore,
+        orderScore: finalScore,
       });
     }
   }
@@ -291,6 +312,7 @@ export function generateRiftMoves(
     moves.push({
       move: createRiftMove(i),
       score,
+      orderScore: score,
     });
   }
   
@@ -309,12 +331,28 @@ export function generateAllMoves(
 ): ScoredMove[] {
   const reinforceMoves = generateReinforceMoves(board, player);
   const riftMoves = generateRiftMoves(board, player);
-  
-  // Combine and sort
-  const allMoves = [...reinforceMoves, ...riftMoves];
-  allMoves.sort((a, b) => b.score - a.score);
-  
-  return allMoves;
+
+  // Merge two already-sorted lists (avoid an extra O(n log n) sort in the hot path).
+  const out: ScoredMove[] = new Array(reinforceMoves.length + riftMoves.length);
+  let i = 0;
+  let j = 0;
+  let k = 0;
+
+  while (i < reinforceMoves.length && j < riftMoves.length) {
+    const a = reinforceMoves[i];
+    const b = riftMoves[j];
+    if (a.score >= b.score) {
+      out[k++] = a;
+      i++;
+    } else {
+      out[k++] = b;
+      j++;
+    }
+  }
+  while (i < reinforceMoves.length) out[k++] = reinforceMoves[i++];
+  while (j < riftMoves.length) out[k++] = riftMoves[j++];
+
+  return out;
 }
 
 /**
@@ -344,12 +382,17 @@ export function generateTacticalMoves(
   // - Any move using known blocking squares (pattern-based critical defense)
   // - High-impact rifts that break threats
   const opponentWinSquares = findWinningPositionsAssumingKoClears(board, opponent);
-  const opponentWinSet = new Set<CellIndex>(opponentWinSquares);
   // Ko is temporary; for quiescence we want blocks that remain relevant once Ko clears.
   const blocking = getBlockingMask(board, player, true);
 
   const isBlockingSquare = (pos: CellIndex): boolean => blocking.mask[pos] === blocking.stamp;
-  const isDirectWinBlock = (pos: CellIndex): boolean => opponentWinSet.has(pos);
+  // opponentWinSquares is typically tiny (often 0-2); a linear scan beats allocating a Set.
+  const isDirectWinBlock = (pos: CellIndex): boolean => {
+    for (let i = 0; i < opponentWinSquares.length; i++) {
+      if (opponentWinSquares[i] === pos) return true;
+    }
+    return false;
+  };
 
   const tactical: ScoredMove[] = [];
 

@@ -6,7 +6,7 @@
 import { BOARD_SIZE, SYNERGY_BONUS, DIRECTIONS } from './constants';
 import type { Board, CellIndex, Color } from './types';
 import { EMPTY } from './types';
-import { manhattanDistance, getOpponent, areColinear, getPositionsBetween, toIndex, inBounds } from './utils';
+import { manhattanDistance, getOpponent, areColinear, toIndex, inBounds } from './utils';
 import { scanLine, classifyLine } from './patterns';
 import { getBlockingMask } from './threats';
 import type { BlockingMask } from './threats';
@@ -24,14 +24,22 @@ export function usesShieldException(
   if (!colinear || !direction) return false;
   
   const opponent = getOpponent(player);
-  const between = getPositionsBetween(pos1, pos2);
-  
-  for (const pos of between) {
-    if (board.cells[pos] === opponent) {
-      return true;
-    }
+
+  // Allocation-free scan between pos1 and pos2 (exclusive).
+  const [dRow, dCol] = direction;
+  const r1 = Math.floor(pos1 / BOARD_SIZE);
+  const c1 = pos1 % BOARD_SIZE;
+  const r2 = Math.floor(pos2 / BOARD_SIZE);
+  const c2 = pos2 % BOARD_SIZE;
+
+  let row = r1 + dRow;
+  let col = c1 + dCol;
+  while (row !== r2 || col !== c2) {
+    if (board.cells[row * BOARD_SIZE + col] === opponent) return true;
+    row += dRow;
+    col += dCol;
   }
-  
+
   return false;
 }
 
