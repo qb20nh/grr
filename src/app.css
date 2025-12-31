@@ -30,7 +30,6 @@
 html, body {
   height: 100%;
   width: 100%;
-  overflow: hidden;
 }
 
 body {
@@ -40,11 +39,13 @@ body {
     radial-gradient(ellipse at 50% 0%, rgba(0, 217, 255, 0.08) 0%, transparent 50%),
     radial-gradient(ellipse at 80% 80%, rgba(0, 217, 255, 0.05) 0%, transparent 40%);
   color: var(--text-primary);
-  min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 button {

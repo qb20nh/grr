@@ -16,6 +16,8 @@
   let hoverPosition: Position | null = $state(null);
   let cursorStyle = $state('crosshair');
   let cellSize = $state(MAX_CELL_SIZE);
+  let touchStart: { x: number; y: number } | null = null;
+  let touchMoved = $state(false);
 
   function calculateCellSize(): number {
     if (typeof window === 'undefined') return MAX_CELL_SIZE;
@@ -197,12 +199,20 @@
   }
 
   function handleTouchEnd(event: TouchEvent) {
-    event.preventDefault();
     const state = gameStore.getState();
     if (state.phase === 'replay') return;
     
     const touch = event.changedTouches[0];
     if (!touch) return;
+
+    // If the finger moved, treat this as a scroll gesture and do not place.
+    if (touchMoved) {
+      touchStart = null;
+      touchMoved = false;
+      return;
+    }
+    // Tap: prevent the synthetic click and handle as a board action.
+    event.preventDefault();
     
     const pos = getBoardPositionFromCoords(touch.clientX, touch.clientY);
     if (pos) {
@@ -215,8 +225,21 @@
   }
 
   function handleTouchStart(event: TouchEvent) {
-    // Prevent scrolling/zooming when touching the board
-    event.preventDefault();
+    const touch = event.touches[0];
+    if (!touch) return;
+    touchStart = { x: touch.clientX, y: touch.clientY };
+    touchMoved = false;
+  }
+
+  function handleTouchMove(event: TouchEvent) {
+    const touch = event.touches[0];
+    if (!touch || !touchStart) return;
+    const dx = touch.clientX - touchStart.x;
+    const dy = touch.clientY - touchStart.y;
+    // Threshold to distinguish tap vs scroll.
+    if (dx * dx + dy * dy > 12 * 12) {
+      touchMoved = true;
+    }
   }
 </script>
 
@@ -227,9 +250,10 @@
     onmouseleave={handleMouseLeave}
     onclick={handleClick}
     ontouchstart={handleTouchStart}
+    ontouchmove={handleTouchMove}
     ontouchend={handleTouchEnd}
     style:cursor={cursorStyle}
-    style:touch-action="none"
+    style:touch-action="pan-y"
     role="grid"
     aria-label="Gomoku game board"
   ></canvas>

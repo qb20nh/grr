@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { gameStore, currentPlayer, winner, isAiTurn, aiThinking, winningLine, gamePhase } from '$lib/stores/gameStore';
+  import { gameStore, currentPlayer, winner, isAiTurn, aiThinking } from '$lib/stores/gameStore';
   import { replayStore, isReplaying } from '$lib/stores/replayStore';
   import { gameEngine } from '$lib/game/engine';
 
@@ -32,18 +32,20 @@
 
 <div class="game-status">
   {#if $winner}
-    <div class="status-row">
-      <div class="stone" class:black={$winner === 'black'} class:white={$winner === 'white'}></div>
-      {#if $isReplaying}
-        <span class="status-text accent">Replay</span>
-      {:else}
-        <span class="status-text win">{$winner === 'black' ? 'Black' : 'White'} Wins</span>
-      {/if}
+    <div class="left">
+      <div class="status-row">
+        <div class="stone" class:black={$winner === 'black'} class:white={$winner === 'white'}></div>
+        {#if $isReplaying}
+          <span class="status-text accent">Replay</span>
+        {/if}
+      </div>
     </div>
     {#if !$isReplaying}
-      <div class="btn-row">
-        <button class="btn-sm primary" onclick={newGame}>New</button>
-        <button class="btn-sm" onclick={reviewGame}>Review</button>
+      <div class="right">
+        <div class="btn-row">
+          <button class="btn-sm primary" onclick={newGame}>New</button>
+          <button class="btn-sm" onclick={reviewGame}>Review</button>
+        </div>
       </div>
     {/if}
   {:else}
@@ -75,6 +77,7 @@
   .game-status {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 12px;
     padding: 8px 12px;
     background: var(--bg-secondary);
@@ -82,6 +85,20 @@
     border: 1px solid var(--grid-line);
     min-height: 44px;
     flex-wrap: wrap;
+  }
+
+  .left {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+    margin-left: auto;
   }
 
   .status-row {
@@ -111,10 +128,6 @@
     font-size: 14px;
     font-weight: 600;
     color: var(--text-primary);
-  }
-
-  .status-text.win {
-    color: var(--success);
   }
 
   .status-text.accent {

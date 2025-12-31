@@ -35,7 +35,7 @@
   </div>
   <div class="action-row">
     <button class="btn-sm" onclick={handleDownload}>↓ Save</button>
-    <button class="btn-sm muted" onclick={handleExit}>Exit</button>
+    <button class="btn-sm" onclick={handleExit}>Exit</button>
   </div>
 </div>
 

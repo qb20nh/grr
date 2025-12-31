@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { pendingPlacements, pendingRift, canConfirmMove, aiThinking, isAiTurn } from '$lib/stores/gameStore';
+  import { pendingPlacements, pendingRift, canConfirmMove, aiThinking, isAiTurn, winner, winningLine, gameStore } from '$lib/stores/gameStore';
   import { gameEngine } from '$lib/game/engine';
 
   function confirmMove() {
@@ -9,6 +9,50 @@
   function cancelMove() {
     gameEngine.cancelMove();
   }
+
+  function ordinal(n: number): string {
+    const abs = Math.abs(n);
+    const mod100 = abs % 100;
+    if (mod100 >= 11 && mod100 <= 13) return `${n}th`;
+    switch (abs % 10) {
+      case 1: return `${n}st`;
+      case 2: return `${n}nd`;
+      case 3: return `${n}rd`;
+      default: return `${n}th`;
+    }
+  }
+
+  let winnerName = $derived.by(() => ($winner === 'black' ? 'Black' : $winner === 'white' ? 'White' : ''));
+  let loserName = $derived.by(() => ($winner === 'black' ? 'White' : $winner === 'white' ? 'Black' : ''));
+  let isResignation = $derived.by(() => !($winningLine && $winningLine.length > 0));
+  let turnNumber = $derived.by(() => {
+    if (!$winner) return 0;
+    const n = $gameStore.moveHistory.length;
+    const isResign = !($winningLine && $winningLine.length > 0);
+    return isResign ? n + 1 : n;
+  });
+
+  let isVsAi = $derived.by(() => $gameStore.gameMode === 'vs-ai' && $gameStore.aiColor !== null);
+  let humanColor = $derived.by(() => {
+    const ai = $gameStore.aiColor;
+    if (!ai) return null;
+    return ai === 'black' ? 'white' : 'black';
+  });
+
+  let resultDetail = $derived.by(() => {
+    if (!$winner) return '';
+    const actor = isResignation ? loserName : winnerName;
+    const reason = isResignation ? 'resignation' : '5 in a row';
+    return `${actor} ${reason} at ${ordinal(turnNumber)} turn`;
+  });
+
+  let resultText = $derived.by(() => {
+    if (!$winner) return '';
+    const base = resultDetail;
+    if (!isVsAi || !humanColor) return base;
+    const outcome = $winner === humanColor ? 'You won!' : 'You lost!';
+    return `${outcome} ${base}`;
+  });
 
   let currentMode = $derived.by(() => {
     if ($pendingRift) return 'rift';
@@ -26,29 +70,35 @@
   let showCancel = $derived(currentMode !== 'idle');
 </script>
 
-<div class="action-panel">
-  <div class="mode-row">
-    {#if currentMode === 'rift'}
-      <span class="mode-icon rift">✕</span>
-      <span class="mode-label">Rift</span>
-    {:else if currentMode === 'reinforce'}
-      <span class="mode-icon reinforce">⬡</span>
-      <span class="mode-label">{$pendingPlacements.length}/2</span>
-    {:else}
-      <span class="mode-icon idle">·</span>
-      <span class="mode-label muted">{idleText}</span>
-    {/if}
+{#if $winner}
+  <div class="action-panel ended">
+    <span class="mode-label result">{resultText}</span>
   </div>
+{:else}
+  <div class="action-panel">
+    <div class="mode-row">
+      {#if currentMode === 'rift'}
+        <span class="mode-icon rift">✕</span>
+        <span class="mode-label">Rift</span>
+      {:else if currentMode === 'reinforce'}
+        <span class="mode-icon reinforce">⬡</span>
+        <span class="mode-label">{$pendingPlacements.length}/2</span>
+      {:else}
+        <span class="mode-icon idle">·</span>
+        <span class="mode-label muted">{idleText}</span>
+      {/if}
+    </div>
 
-  <div class="btn-row">
-    {#if showConfirm}
-      <button class="btn confirm" onclick={confirmMove}>✓</button>
-    {/if}
-    {#if showCancel}
-      <button class="btn cancel" onclick={cancelMove}>✕</button>
-    {/if}
+    <div class="btn-row">
+      {#if showConfirm}
+        <button class="btn confirm" onclick={confirmMove}>✓</button>
+      {/if}
+      {#if showCancel}
+        <button class="btn cancel" onclick={cancelMove}>✕</button>
+      {/if}
+    </div>
   </div>
-</div>
+{/if}
 
 <style>
   .action-panel {
@@ -61,6 +111,10 @@
     border-radius: 8px;
     border: 1px solid var(--grid-line);
     min-height: 44px;
+  }
+
+  .action-panel.ended {
+    justify-content: center;
   }
 
   .mode-row {
@@ -90,6 +144,10 @@
   .mode-label {
     font-size: 13px;
     font-weight: 500;
+  }
+
+  .mode-label.result {
+    font-weight: 600;
   }
 
   .mode-label.muted {

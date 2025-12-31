@@ -112,14 +112,15 @@
     align-items: center;
   }
 
-  @media (min-width: 900px) {
+  /* Use the 3-column layout only when there is enough horizontal room for BOTH side panels + board. */
+  @media (min-width: 1024px) {
     .game-container {
       padding: 16px;
     }
 
     .game-layout {
       flex-direction: row;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       justify-content: center;
       align-items: flex-start;
       gap: 16px;

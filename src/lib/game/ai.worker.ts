@@ -137,6 +137,9 @@ let ponderSliceMs: number = 60;
 let ponderMaxDepth: number = CONFIG.MAX_DEPTH;
 let ponderDebug = false;
 let ponderLatestPosition: { board: Board; player: Color } | null = null;
+let ponderDeadlineMs = 0;
+
+const PONDER_MAX_TIME_MS = 5000;
 
 function stopPondering(): void {
   ponderActive = false;
@@ -147,6 +150,10 @@ function stopPondering(): void {
 
 async function runPonderLoop(generation: number): Promise<void> {
   while (ponderActive && generation === ponderGeneration && ponderSession) {
+    if (ponderDeadlineMs > 0 && Date.now() >= ponderDeadlineMs) {
+      stopPondering();
+      break;
+    }
     // Run a small slice so we can respond to stop/update quickly.
     ponderSession.searchSlice(ponderSliceMs);
     // Yield to the worker event loop.
@@ -163,6 +170,7 @@ async function startPondering(request: PonderStartRequest): Promise<void> {
   stopPondering();
   ponderActive = true;
   ponderLatestPosition = { board, player };
+  ponderDeadlineMs = Date.now() + PONDER_MAX_TIME_MS;
   const myGen = ponderGeneration;
 
   const nnueWeights = await getNnueWeights();
