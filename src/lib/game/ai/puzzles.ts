@@ -7,7 +7,7 @@
 
 import type { Board as InternalBoard, Color, Move } from './types';
 import { BLACK, WHITE } from './types';
-import { boardFrom2D, cloneBoard, makeMove, unmakeMove, getWinnerAfterMove } from './board';
+import { boardFrom2D, cloneBoard, makeMove, unmakeMove, getWinnerAfterMove, validateReinforce } from './board';
 import { findBestMove } from './search';
 import { findWinningPositions } from './threats';
 import { generateAllMoves } from './moveGen';
@@ -79,9 +79,12 @@ export function runTacticalPuzzles(timeLimitMs: number = 250): PuzzleRunSummary 
         if (move.action !== 'reinforce' || !isSingleWinMove(move)) {
           return { ok: false, details: 'Expected a single-stone winning reinforce move.' };
         }
-        const expected = toIndex(7, 7);
-        if (move.pos1 !== expected) {
-          return { ok: false, details: `Expected win at ${JSON.stringify(toPosition(expected))}.` };
+        // Accept any immediate winning single-stone placement.
+        const undo = makeMove(board, move, BLACK);
+        const winner = getWinnerAfterMove(board, move, BLACK);
+        unmakeMove(board, undo, BLACK);
+        if (winner !== BLACK) {
+          return { ok: false, details: `Expected an immediate win, got ${winner ?? 'no winner'}.` };
         }
         return { ok: true };
       },
@@ -219,6 +222,109 @@ export function runTacticalPuzzles(timeLimitMs: number = 250): PuzzleRunSummary 
         const after = applyMove(board, move, BLACK);
         if (hasImmediateWinningMove(after, WHITE)) {
           return { ok: false, details: 'Opponent still has an immediate winning move (two-stone reinforce win).' };
+        }
+        return { ok: true };
+      },
+    },
+    {
+      name: 'Ko-clears threat: rift is required when an open-four end is Ko-blocked',
+      toMove: BLACK,
+      ko: { row: 7, col: 4 },
+      board: (() => {
+        const g = emptyGrid();
+        // White has _WWWW_ horizontally at row 7, cols 5-8.
+        // Winning squares are (7,4) and (7,9). (7,4) is Ko-blocked right now,
+        // but Ko will clear after black reinforce, so black must still address it.
+        place(g, 'white', 7, 5);
+        place(g, 'white', 7, 6);
+        place(g, 'white', 7, 7);
+        place(g, 'white', 7, 8);
+        // Some black stones elsewhere.
+        place(g, 'black', 6, 6);
+        place(g, 'black', 8, 8);
+        return g;
+      })(),
+      assert: (board, move) => {
+        if (move.action !== 'rift') {
+          return { ok: false, details: 'Expected rift; Ko prevents placing on the critical end this turn.' };
+        }
+        const after = applyMove(board, move, BLACK);
+        if (hasImmediateWinningMove(after, WHITE)) {
+          return { ok: false, details: 'Opponent still has an immediate winning move after rift.' };
+        }
+        return { ok: true };
+      },
+    },
+    {
+      name: 'Shield exception: double-block at both ends is a legal reinforce move',
+      toMove: BLACK,
+      board: (() => {
+        const g = emptyGrid();
+        // White has _WWWW_ horizontally at row 7, cols 5-8.
+        // Black placing at (7,4) and (7,9) is colinear but SHOULD be legal because
+        // there are opponent stones between them (shield exception).
+        place(g, 'white', 7, 5);
+        place(g, 'white', 7, 6);
+        place(g, 'white', 7, 7);
+        place(g, 'white', 7, 8);
+        place(g, 'black', 6, 6);
+        place(g, 'black', 8, 8);
+        return g;
+      })(),
+      assert: (board) => {
+        const a = toIndex(7, 4);
+        const b = toIndex(7, 9);
+        if (!validateReinforce(board, a, b, BLACK)) {
+          return { ok: false, details: 'Expected shield-exception colinear reinforce to be legal.' };
+        }
+        return { ok: true };
+      },
+    },
+    {
+      name: 'Colinearity rule: adjacent colinear placements without shield are illegal',
+      toMove: BLACK,
+      board: (() => {
+        const g = emptyGrid();
+        // Empty board (center heuristics irrelevant). Adjacent horizontal placement
+        // has no opponent stone between => should be illegal.
+        return g;
+      })(),
+      assert: (board) => {
+        const a = toIndex(7, 7);
+        const b = toIndex(7, 8);
+        if (validateReinforce(board, a, b, BLACK)) {
+          return { ok: false, details: 'Expected adjacent colinear reinforce to be illegal without shield.' };
+        }
+        return { ok: true };
+      },
+    },
+    {
+      name: 'Overline trap: avoid rift that gives opponent exact-5 immediately',
+      toMove: BLACK,
+      board: (() => {
+        const g = emptyGrid();
+        // White has 6 in a row (overline is NOT a win). Any rift on this line would
+        // trim it to an exact-5 segment, instantly giving White the win.
+        place(g, 'white', 7, 0);
+        place(g, 'white', 7, 1);
+        place(g, 'white', 7, 2);
+        place(g, 'white', 7, 3);
+        place(g, 'white', 7, 4);
+        place(g, 'white', 7, 5);
+        // Some black stones elsewhere.
+        place(g, 'black', 6, 6);
+        place(g, 'black', 8, 8);
+        return g;
+      })(),
+      assert: (board, move) => {
+        if (move.action === 'rift') {
+          return { ok: false, details: 'Rifting an overline should be avoided (gives opponent exact-5 win).' };
+        }
+        const undo = makeMove(board, move, BLACK);
+        const winner = getWinnerAfterMove(board, move, BLACK);
+        unmakeMove(board, undo, BLACK);
+        if (winner === WHITE) {
+          return { ok: false, details: 'Move should not immediately lose to exact-5 after rift/reinforce.' };
         }
         return { ok: true };
       },

@@ -22,6 +22,28 @@ function createReplayStore() {
     autoPlayInterval: null
   });
 
+  // Keep replay state consistent with the main game phase.
+  // If the game leaves replay (e.g., returning to menu / starting a new game) without
+  // explicitly calling `exitReplay()`, we must still clear replay UI state and stop autoplay.
+  gameStore.subscribe(game => {
+    if (game.phase === 'replay') return;
+    update(state => {
+      // Fast path: already reset
+      if (!state.active && state.autoPlayInterval === null && state.moveHistory.length === 0 && state.currentIndex === 0) {
+        return state;
+      }
+      if (state.autoPlayInterval) {
+        clearInterval(state.autoPlayInterval);
+      }
+      return {
+        active: false,
+        moveHistory: [],
+        currentIndex: 0,
+        autoPlayInterval: null
+      };
+    });
+  });
+
   /**
    * Reconstruct board state by applying moves up to the given index
    */

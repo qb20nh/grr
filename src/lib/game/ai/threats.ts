@@ -9,6 +9,61 @@ import { ThreatLevel, EMPTY } from './types';
 import { getOpponent } from './utils';
 import { countPatterns, scanLine, classifyLine, countThreatsCreated } from './patterns';
 
+// ---- Blocking mask (scratch) ----
+export interface BlockingMask {
+  mask: Uint32Array;
+  stamp: number;
+}
+
+const BLOCK_MASK = new Uint32Array(BOARD_CELLS);
+let blockStamp = 1;
+
+function nextBlockStamp(): number {
+  blockStamp = (blockStamp + 1) >>> 0;
+  if (blockStamp === 0) {
+    BLOCK_MASK.fill(0);
+    blockStamp = 1;
+  }
+  return blockStamp;
+}
+
+/**
+ * Compute a mask of squares that block opponent threats for `player`.
+ * Marked squares are empty and legal to place (Ko respected unless `ignoreKo` is true).
+ *
+ * Returns a reference to a shared scratch mask; consume it immediately.
+ */
+export function getBlockingMask(board: Board, player: Color, ignoreKo: boolean = false): BlockingMask {
+  const opponent = getOpponent(player);
+  const stamp = nextBlockStamp();
+
+  for (let pos = 0; pos < BOARD_CELLS; pos++) {
+    if (board.cells[pos] !== opponent) continue;
+
+    for (let dir = 0; dir < 4; dir++) {
+      const info = scanLine(board, pos, dir, opponent, ignoreKo);
+      const pattern = classifyLine(info);
+
+      // Threat patterns where placing on extend/gap squares blocks the threat.
+      if (
+        pattern !== 'OPEN_FOUR' &&
+        pattern !== 'GAP_FOUR' &&
+        pattern !== 'HALF_FOUR' &&
+        pattern !== 'OPEN_THREE'
+      ) continue;
+
+      for (const e of info.extendPositions) {
+        BLOCK_MASK[e] = stamp;
+      }
+      for (const g of info.gapPositions) {
+        BLOCK_MASK[g] = stamp;
+      }
+    }
+  }
+
+  return { mask: BLOCK_MASK, stamp };
+}
+
 // Candidate generation for fork detection (radius-2 neighborhood around any stone).
 // Implemented locally to avoid cyclic deps with move generation.
 const FORK_OFFSETS: readonly [number, number][] = (() => {
@@ -166,45 +221,26 @@ export function countForks(board: Board, player: Color): number {
  * Find positions that block opponent's threats
  */
 export function findBlockingPositions(board: Board, player: Color): CellIndex[] {
-  const opponent = getOpponent(player);
-  const blocking: Set<CellIndex> = new Set();
-  
-  // Find opponent's threatening positions
-  for (let pos = 0; pos < BOARD_CELLS; pos++) {
-    if (board.cells[pos] !== opponent) continue;
-    
-    for (let dir = 0; dir < 4; dir++) {
-      const info = scanLine(board, pos, dir, opponent);
-      const pattern = classifyLine(info);
-      
-      // If opponent has a threat, find blocking positions
-      if (pattern === 'OPEN_FOUR' ||
-          pattern === 'GAP_FOUR' ||
-          pattern === 'HALF_FOUR' ||
-          pattern === 'OPEN_THREE') {
-        // Add extend positions as blocking candidates
-        for (const extPos of info.extendPositions) {
-          if (board.cells[extPos] === EMPTY && board.koPosition !== extPos) {
-            blocking.add(extPos);
-          }
-        }
-        // Add gap positions
-        for (const gapPos of info.gapPositions) {
-          if (board.cells[gapPos] === EMPTY && board.koPosition !== gapPos) {
-            blocking.add(gapPos);
-          }
-        }
-      }
-    }
+  const { mask, stamp } = getBlockingMask(board, player, false);
+  const out: CellIndex[] = [];
+  for (let i = 0; i < BOARD_CELLS; i++) {
+    if (mask[i] === stamp) out.push(i);
   }
-  
-  return Array.from(blocking);
+  return out;
+}
+
+/**
+ * Variant: find winning positions assuming Ko will not block the placement
+ * on the opponent's next move (i.e. treat Ko as open for placement).
+ */
+export function findWinningPositionsAssumingKoClears(board: Board, player: Color): CellIndex[] {
+  return findWinningPositions(board, player, true);
 }
 
 /**
  * Find positions that create immediate wins
  */
-export function findWinningPositions(board: Board, player: Color): CellIndex[] {
+export function findWinningPositions(board: Board, player: Color, ignoreKo: boolean = false): CellIndex[] {
   // A single-stone win implies there exists a 4-threat (OPEN/HALF/GAP four).
   // Detect these by scanning existing stones (much faster than trying every empty cell).
   const winning = new Set<CellIndex>();
@@ -213,7 +249,7 @@ export function findWinningPositions(board: Board, player: Color): CellIndex[] {
     if (board.cells[pos] !== player) continue;
 
     for (let dir = 0; dir < 4; dir++) {
-      const info = scanLine(board, pos, dir, player);
+      const info = scanLine(board, pos, dir, player, ignoreKo);
       const pattern = classifyLine(info);
 
       if (pattern === 'OPEN_FOUR' || pattern === 'HALF_FOUR') {
@@ -277,7 +313,8 @@ export function riftBreaksThreat(
   if (board.cells[riftPos] !== opponent) return false;
   
   for (let dir = 0; dir < 4; dir++) {
-    const info = scanLine(board, riftPos, dir, opponent);
+    // Ko is only temporary; threats that are Ko-blocked right now may be real next turn.
+    const info = scanLine(board, riftPos, dir, opponent, true);
     const pattern = classifyLine(info);
     
     if (pattern === 'FIVE' ||
@@ -306,7 +343,9 @@ export function evaluateRiftTarget(
   let value = 0;
   
   for (let dir = 0; dir < 4; dir++) {
-    const info = scanLine(board, riftPos, dir, opponent);
+    // Ko is only temporary; evaluate the threats this stone contributes to assuming
+    // Ko will not block the opponent on their next move.
+    const info = scanLine(board, riftPos, dir, opponent, true);
     const pattern = classifyLine(info);
     
     // Score based on what pattern we're breaking

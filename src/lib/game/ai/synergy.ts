@@ -7,8 +7,9 @@ import { BOARD_SIZE, SYNERGY_BONUS, DIRECTIONS } from './constants';
 import type { Board, CellIndex, Color } from './types';
 import { EMPTY } from './types';
 import { manhattanDistance, getOpponent, areColinear, getPositionsBetween, toIndex, inBounds } from './utils';
-import { scanLine, classifyLine, countThreatsCreated } from './patterns';
-import { hasCriticalThreat, findBlockingPositions } from './threats';
+import { scanLine, classifyLine } from './patterns';
+import { getBlockingMask } from './threats';
+import type { BlockingMask } from './threats';
 
 /**
  * Check if two positions use the Shield Exception (colinear with opponent between)
@@ -94,10 +95,11 @@ export function extendsSameLine(
 export function blocksOpponentThreat(
   board: Board,
   pos: CellIndex,
-  player: Color
+  player: Color,
+  blocking?: BlockingMask
 ): boolean {
-  const blockingPositions = findBlockingPositions(board, player);
-  return blockingPositions.includes(pos);
+  const bm = blocking ?? getBlockingMask(board, player, false);
+  return bm.mask[pos] === bm.stamp;
 }
 
 /**
@@ -132,7 +134,8 @@ export function evaluatePairSynergy(
   board: Board,
   pos1: CellIndex,
   pos2: CellIndex,
-  player: Color
+  player: Color,
+  blocking?: BlockingMask
 ): number {
   let synergy = 0;
   
@@ -168,8 +171,8 @@ export function evaluatePairSynergy(
   // 3. One attacks, one defends critical threat
   const attacks1 = createsWinningThreat(board, pos1, player);
   const attacks2 = createsWinningThreat(board, pos2, player);
-  const blocks1 = blocksOpponentThreat(board, pos1, player);
-  const blocks2 = blocksOpponentThreat(board, pos2, player);
+  const blocks1 = blocksOpponentThreat(board, pos1, player, blocking);
+  const blocks2 = blocksOpponentThreat(board, pos2, player, blocking);
   
   if ((attacks1 && blocks2) || (attacks2 && blocks1)) {
     synergy += SYNERGY_BONUS.ATTACK_DEFEND;
@@ -218,7 +221,8 @@ function countThreatsAtPosition(
 export function evaluateSinglePosition(
   board: Board,
   pos: CellIndex,
-  player: Color
+  player: Color,
+  blocking?: BlockingMask
 ): number {
   const opponent = getOpponent(player);
   let score = 0;
@@ -267,7 +271,7 @@ export function evaluateSinglePosition(
   board.cells[pos] = orig;
   
   // Check if this blocks opponent threats
-  if (blocksOpponentThreat(board, pos, player)) {
+  if (blocksOpponentThreat(board, pos, player, blocking)) {
     // Evaluate what we're blocking
     board.cells[pos] = opponent;
     for (let dir = 0; dir < 4; dir++) {
@@ -312,14 +316,15 @@ export function evaluateReinforceMove(
   board: Board,
   pos1: CellIndex,
   pos2: CellIndex,
-  player: Color
+  player: Color,
+  blocking?: BlockingMask
 ): number {
   // Individual position scores
-  const score1 = evaluateSinglePosition(board, pos1, player);
-  const score2 = evaluateSinglePosition(board, pos2, player);
+  const score1 = evaluateSinglePosition(board, pos1, player, blocking);
+  const score2 = evaluateSinglePosition(board, pos2, player, blocking);
   
   // Synergy bonus
-  const synergy = evaluatePairSynergy(board, pos1, pos2, player);
+  const synergy = evaluatePairSynergy(board, pos1, pos2, player, blocking);
   
   // Check for immediate win
   const orig1 = board.cells[pos1];

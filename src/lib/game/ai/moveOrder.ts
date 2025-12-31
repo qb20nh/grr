@@ -4,123 +4,124 @@
  */
 
 import { CONFIG } from './constants';
-import type { Board, Color, Move, ScoredMove, ReinforceMove } from './types';
-import { movesEqual, moveToKey } from './utils';
+import type { Board, Color, Move, ScoredMove } from './types';
 import { generateAllMoves } from './moveGen';
+import { decodeMove, encodeMove, MOVE_CODE_NONE } from './moveCodec';
 
 /**
  * Killer Move Table
  * Stores moves that caused beta cutoffs at each depth
  */
 class KillerMoveTable {
-  private table: (Move | null)[][];
+  private table: Int32Array;
+  private maxDepth: number;
   
   constructor(maxDepth: number = CONFIG.MAX_DEPTH) {
-    this.table = Array(maxDepth).fill(null).map(() => 
-      Array(CONFIG.KILLER_SLOTS).fill(null)
-    );
+    this.maxDepth = maxDepth;
+    this.table = new Int32Array(maxDepth * CONFIG.KILLER_SLOTS);
+    this.table.fill(MOVE_CODE_NONE);
   }
   
   /**
    * Add a killer move at the given depth
    */
-  add(depth: number, move: Move): void {
-    if (depth < 0 || depth >= this.table.length) return;
-    
-    const slot = this.table[depth];
-    
+  add(depth: number, moveCode: number): void {
+    if (depth < 0 || depth >= this.maxDepth) return;
+    if (moveCode === MOVE_CODE_NONE) return;
+
+    const base = depth * CONFIG.KILLER_SLOTS;
     // Don't add if already the first killer
-    if (movesEqual(slot[0], move)) return;
-    
+    if (this.table[base] === moveCode) return;
+
     // Shift existing killers and add new one at front
     for (let i = CONFIG.KILLER_SLOTS - 1; i > 0; i--) {
-      slot[i] = slot[i - 1];
+      this.table[base + i] = this.table[base + i - 1];
     }
-    slot[0] = move;
+    this.table[base] = moveCode;
   }
   
   /**
    * Check if a move is a killer at the given depth
    */
-  isKiller(depth: number, move: Move): boolean {
-    if (depth < 0 || depth >= this.table.length) return false;
-    
-    return this.table[depth].some(k => movesEqual(k, move));
+  isKiller(depth: number, moveCode: number): boolean {
+    if (depth < 0 || depth >= this.maxDepth) return false;
+    if (moveCode === MOVE_CODE_NONE) return false;
+
+    const base = depth * CONFIG.KILLER_SLOTS;
+    for (let i = 0; i < CONFIG.KILLER_SLOTS; i++) {
+      if (this.table[base + i] === moveCode) return true;
+    }
+    return false;
   }
   
   /**
    * Get killer moves at the given depth
    */
   getKillers(depth: number): Move[] {
-    if (depth < 0 || depth >= this.table.length) return [];
-    
-    return this.table[depth].filter((m): m is Move => m !== null);
+    if (depth < 0 || depth >= this.maxDepth) return [];
+
+    const base = depth * CONFIG.KILLER_SLOTS;
+    const out: Move[] = [];
+    for (let i = 0; i < CONFIG.KILLER_SLOTS; i++) {
+      const code = this.table[base + i];
+      if (code === MOVE_CODE_NONE) continue;
+      const mv = decodeMove(code);
+      if (mv) out.push(mv);
+    }
+    return out;
   }
   
   /**
    * Clear all killer moves
    */
   clear(): void {
-    for (const slot of this.table) {
-      slot.fill(null);
-    }
+    this.table.fill(MOVE_CODE_NONE);
   }
 }
+
+const HISTORY_TABLE_SIZE = 1 << 18; // >= max encodeMove() value
 
 /**
  * History Heuristic Table
  * Tracks how often moves cause cutoffs
  */
 class HistoryTable {
-  private table: Map<string, number>;
-  private maxValue: number;
+  private table: Int32Array;
   
   constructor() {
-    this.table = new Map();
-    this.maxValue = 0;
+    this.table = new Int32Array(HISTORY_TABLE_SIZE);
   }
   
   /**
    * Update history score for a move
    */
-  update(move: Move, depth: number): void {
-    const key = moveToKey(move);
+  update(moveCode: number, depth: number): void {
+    if (moveCode === MOVE_CODE_NONE) return;
+    if (moveCode < 0 || moveCode >= this.table.length) return;
     const bonus = depth * depth; // Deeper cutoffs are more valuable
-    const current = this.table.get(key) ?? 0;
-    const newValue = current + bonus;
-    
-    this.table.set(key, newValue);
-    this.maxValue = Math.max(this.maxValue, newValue);
-    
-    // Periodically scale down to prevent overflow
-    if (this.maxValue > 1000000) {
-      this.scale(0.5);
-    }
+    const current = this.table[moveCode];
+    const next = current + bonus;
+    // Saturate to avoid overflow; aging is handled by periodic clears between searches.
+    this.table[moveCode] = next > 0x7fffffff ? 0x7fffffff : next;
   }
   
   /**
    * Get history score for a move
    */
-  get(move: Move): number {
-    return this.table.get(moveToKey(move)) ?? 0;
+  get(moveCode: number): number {
+    if (moveCode === MOVE_CODE_NONE) return 0;
+    if (moveCode < 0 || moveCode >= this.table.length) return 0;
+    return this.table[moveCode] ?? 0;
   }
   
   /**
    * Scale all values (for aging)
    */
-  scale(factor: number): void {
-    for (const [key, value] of this.table) {
-      this.table.set(key, Math.floor(value * factor));
-    }
-    this.maxValue = Math.floor(this.maxValue * factor);
-  }
-  
   /**
    * Clear all history
    */
   clear(): void {
-    this.table.clear();
-    this.maxValue = 0;
+    this.table.fill(0);
   }
 }
 
@@ -132,14 +133,14 @@ const historyTable = new HistoryTable();
  * Update killer moves after a beta cutoff
  */
 export function updateKillerMoves(depth: number, move: Move): void {
-  killerTable.add(depth, move);
+  killerTable.add(depth, encodeMove(move));
 }
 
 /**
  * Update history heuristic after a cutoff
  */
 export function updateHistory(move: Move, depth: number): void {
-  historyTable.update(move, depth);
+  historyTable.update(encodeMove(move), depth);
 }
 
 /**
@@ -171,12 +172,15 @@ export function orderMoves(
   
   // Calculate ordering score for each move
   const orderedMoves: { move: Move; score: number; orderScore: number }[] = [];
+
+  const ttCode = ttBestMove ? encodeMove(ttBestMove) : MOVE_CODE_NONE;
   
   for (const { move, score } of moves) {
+    const code = encodeMove(move);
     let orderScore = score;
     
     // TT best move gets highest priority
-    if (ttBestMove && movesEqual(move, ttBestMove)) {
+    if (ttCode !== MOVE_CODE_NONE && code === ttCode) {
       orderScore += 100000000;
     }
     
@@ -186,12 +190,12 @@ export function orderMoves(
     }
     
     // Killer moves
-    if (killerTable.isKiller(depth, move)) {
+    if (killerTable.isKiller(depth, code)) {
       orderScore += 1000000;
     }
     
     // History heuristic
-    orderScore += historyTable.get(move);
+    orderScore += historyTable.get(code);
     
     orderedMoves.push({ move, score, orderScore });
   }
@@ -210,20 +214,26 @@ export function getPriorityMoves(
   depth: number,
   ttBestMove: Move | null
 ): Move[] {
-  const moves: Move[] = [];
-  
-  if (ttBestMove) {
-    moves.push(ttBestMove);
+  const out: Move[] = [];
+  const seen = new Set<number>();
+
+  const ttCode = ttBestMove ? encodeMove(ttBestMove) : MOVE_CODE_NONE;
+  if (ttCode !== MOVE_CODE_NONE) {
+    seen.add(ttCode);
+    const mv = decodeMove(ttCode);
+    if (mv) out.push(mv);
   }
-  
+
   const killers = killerTable.getKillers(depth);
   for (const k of killers) {
-    if (!moves.some(m => movesEqual(m, k))) {
-      moves.push(k);
-    }
+    const code = encodeMove(k);
+    if (code === MOVE_CODE_NONE) continue;
+    if (seen.has(code)) continue;
+    seen.add(code);
+    out.push(k);
   }
-  
-  return moves;
+
+  return out;
 }
 
 /**

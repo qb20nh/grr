@@ -9,7 +9,8 @@ import { EMPTY } from './types';
 import { getOpponent, createReinforceMove, createSingleWinMove, createRiftMove, toIndex, inBounds } from './utils';
 import { isValidPlacement, checkColinearityConstraint, validateReinforce } from './board';
 import { evaluateSinglePosition, evaluateReinforceMove } from './synergy';
-import { evaluateRiftTarget, findWinningPositions, findBlockingPositions } from './threats';
+import { evaluateRiftTarget, findWinningPositions, findWinningPositionsAssumingKoClears, getBlockingMask } from './threats';
+import type { BlockingMask } from './threats';
 
 // Precomputed neighbor lists (radius = CONFIG.CANDIDATE_RADIUS) for fast candidate generation.
 const NEIGHBORS: readonly CellIndex[][] = (() => {
@@ -34,37 +35,72 @@ const NEIGHBORS: readonly CellIndex[][] = (() => {
   return neighbors;
 })();
 
+// ---- Scratch masks (avoid Set allocations in hot paths) ----
+const CANDIDATE_SEEN = new Uint32Array(BOARD_CELLS);
+let candidateStamp = 1;
+function nextCandidateStamp(): number {
+  candidateStamp = (candidateStamp + 1) >>> 0;
+  if (candidateStamp === 0) {
+    CANDIDATE_SEEN.fill(0);
+    candidateStamp = 1;
+  }
+  return candidateStamp;
+}
+
+const PAIR_SEEN = new Uint32Array(BOARD_CELLS * BOARD_CELLS);
+let pairStamp = 1;
+function nextPairStamp(): number {
+  pairStamp = (pairStamp + 1) >>> 0;
+  if (pairStamp === 0) {
+    PAIR_SEEN.fill(0);
+    pairStamp = 1;
+  }
+  return pairStamp;
+}
+
+function pairKey(a: CellIndex, b: CellIndex): number {
+  const min = a < b ? a : b;
+  const max = a < b ? b : a;
+  return min * BOARD_CELLS + max;
+}
+
 /**
  * Get candidate positions near existing stones
  */
 export function getCandidatePositions(board: Board): CellIndex[] {
-  const candidates = new Set<CellIndex>();
-  
+  const stamp = nextCandidateStamp();
+  const out: CellIndex[] = [];
+
   // Find positions near existing stones
   for (let i = 0; i < BOARD_CELLS; i++) {
     if (board.cells[i] === EMPTY) continue;
-    
+
     for (const idx of NEIGHBORS[i]) {
-      if (isValidPlacement(board, idx)) {
-        candidates.add(idx);
-      }
+      // Fast placement check (idx already in-bounds).
+      if (board.cells[idx] !== EMPTY) continue;
+      if (board.koPosition === idx) continue;
+      if (CANDIDATE_SEEN[idx] === stamp) continue;
+      CANDIDATE_SEEN[idx] = stamp;
+      out.push(idx);
     }
   }
   
   // If board is empty, use center area
-  if (candidates.size === 0) {
+  if (out.length === 0) {
     const center = Math.floor(BOARD_SIZE / 2);
     for (let dr = -1; dr <= 1; dr++) {
       for (let dc = -1; dc <= 1; dc++) {
         const idx = toIndex(center + dr, center + dc);
-        if (isValidPlacement(board, idx)) {
-          candidates.add(idx);
-        }
+        if (board.cells[idx] !== EMPTY) continue;
+        if (board.koPosition === idx) continue;
+        if (CANDIDATE_SEEN[idx] === stamp) continue;
+        CANDIDATE_SEEN[idx] = stamp;
+        out.push(idx);
       }
     }
   }
-  
-  return Array.from(candidates);
+
+  return out;
 }
 
 /**
@@ -73,11 +109,13 @@ export function getCandidatePositions(board: Board): CellIndex[] {
 export function scoreCandidates(
   board: Board,
   candidates: CellIndex[],
-  player: Color
+  player: Color,
+  blocking?: BlockingMask
 ): { pos: CellIndex; score: number }[] {
+  const bm = blocking ?? getBlockingMask(board, player, false);
   const scored = candidates.map(pos => ({
     pos,
-    score: evaluateSinglePosition(board, pos, player),
+    score: evaluateSinglePosition(board, pos, player, bm),
   }));
   
   // Sort by score descending
@@ -95,8 +133,16 @@ export function generateReinforceMoves(
   player: Color
 ): ScoredMove[] {
   const opponent = getOpponent(player);
+  const blocking = getBlockingMask(board, player, false);
+
+  // Materialize blocking positions once (used for must-block and bonuses).
+  const blockingPositions: CellIndex[] = [];
+  for (let i = 0; i < BOARD_CELLS; i++) {
+    if (blocking.mask[i] === blocking.stamp) blockingPositions.push(i);
+  }
+
   const candidates = getCandidatePositions(board);
-  const scoredCandidates = scoreCandidates(board, candidates, player);
+  const scoredCandidates = scoreCandidates(board, candidates, player, blocking);
   
   // Take top candidates for pair generation
   const topCandidates = scoredCandidates.slice(0, 25);
@@ -117,11 +163,10 @@ export function generateReinforceMoves(
   }
   
   // CRITICAL: Check if opponent can win next move
-  const opponentWinPositions = findWinningPositions(board, opponent);
+  // Ko only blocks placement until the next move. Since we are about to move now,
+  // treat Ko as available when asking “can the opponent win on their next move?”.
+  const opponentWinPositions = findWinningPositionsAssumingKoClears(board, opponent);
   const mustBlock = opponentWinPositions.length > 0;
-  
-  // Get blocking positions (positions that stop opponent threats)
-  const blockingPositions = findBlockingPositions(board, player);
   
   // If opponent can win next turn, blocking is MANDATORY
   // Blocking positions should include the opponent's winning squares
@@ -145,7 +190,7 @@ export function generateReinforceMoves(
         if (!isValidPlacement(board, blockPos2)) continue;
         if (!checkColinearityConstraint(board, blockPos, blockPos2, player)) continue;
         
-        const score = evaluateReinforceMove(board, blockPos, blockPos2, player);
+        const score = evaluateReinforceMove(board, blockPos, blockPos2, player, blocking);
         moves.push({
           move: createReinforceMove(blockPos, blockPos2),
           score: score + 500000, // HUGE bonus for double block
@@ -157,7 +202,7 @@ export function generateReinforceMoves(
         if (cand.pos === blockPos) continue;
         if (!checkColinearityConstraint(board, blockPos, cand.pos, player)) continue;
         
-        const score = evaluateReinforceMove(board, blockPos, cand.pos, player);
+        const score = evaluateReinforceMove(board, blockPos, cand.pos, player, blocking);
         moves.push({
           move: createReinforceMove(blockPos, cand.pos),
           score: score + 300000, // Large bonus for blocking
@@ -178,7 +223,7 @@ export function generateReinforceMoves(
       }
       
       // Score the pair
-      const score = evaluateReinforceMove(board, pos1, pos2, player);
+      const score = evaluateReinforceMove(board, pos1, pos2, player, blocking);
       
       // Bonus if one or both are blocking moves
       let finalScore = score;
@@ -195,17 +240,16 @@ export function generateReinforceMoves(
   // Sort by score and limit
   moves.sort((a, b) => b.score - a.score);
   
-  // Remove duplicates (same pair in different order)
-  const seen = new Set<string>();
+  // Remove duplicates (same pair in different order) using a numeric mask.
+  const stamp = nextPairStamp();
   const uniqueMoves: ScoredMove[] = [];
   
   for (const m of moves) {
     const rm = m.move as ReinforceMove;
-    const key = `${Math.min(rm.pos1, rm.pos2)}-${Math.max(rm.pos1, rm.pos2)}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      uniqueMoves.push(m);
-    }
+    const key = pairKey(rm.pos1, rm.pos2);
+    if (PAIR_SEEN[key] === stamp) continue;
+    PAIR_SEEN[key] = stamp;
+    uniqueMoves.push(m);
   }
   
   return uniqueMoves.slice(0, CONFIG.MAX_PAIRS);
@@ -222,7 +266,7 @@ export function generateRiftMoves(
   const moves: ScoredMove[] = [];
   
   // Check if opponent can win next turn - rifting the right stone is critical
-  const opponentWinPositions = findWinningPositions(board, opponent);
+  const opponentWinPositions = findWinningPositionsAssumingKoClears(board, opponent);
   const opponentCanWin = opponentWinPositions.length > 0;
   
   // Find all opponent stones
@@ -235,7 +279,7 @@ export function generateRiftMoves(
     if (opponentCanWin) {
       // Temporarily remove the stone
       board.cells[i] = EMPTY;
-      const newWinPositions = findWinningPositions(board, opponent);
+      const newWinPositions = findWinningPositionsAssumingKoClears(board, opponent);
       board.cells[i] = opponent;
       
       // If rifting reduces or eliminates opponent's winning positions, huge bonus
@@ -283,12 +327,16 @@ export function generateTacticalMoves(
 ): ScoredMove[] {
   const moves: ScoredMove[] = [];
   const opponent = getOpponent(player);
+  const blocking = getBlockingMask(board, player, false);
   
   // 1. Winning moves
   const winningPositions = findWinningPositions(board, player);
   
   // 2. Blocking moves (if opponent has threats)
-  const blockingPositions = findBlockingPositions(board, player);
+  const blockingPositions: CellIndex[] = [];
+  for (let i = 0; i < BOARD_CELLS; i++) {
+    if (blocking.mask[i] === blocking.stamp) blockingPositions.push(i);
+  }
   
   // 3. Threat-creating moves
   const candidates = getCandidatePositions(board);
@@ -348,7 +396,7 @@ export function generateTacticalMoves(
       if (!isValidPlacement(board, pos1) || !isValidPlacement(board, pos2)) continue;
       if (!checkColinearityConstraint(board, pos1, pos2, player)) continue;
       
-      const score = evaluateReinforceMove(board, pos1, pos2, player);
+      const score = evaluateReinforceMove(board, pos1, pos2, player, blocking);
       moves.push({
         move: createReinforceMove(pos1, pos2),
         score,
@@ -378,10 +426,14 @@ export function generateBlockingMoves(
 ): ScoredMove[] {
   const opponent = getOpponent(player);
   const moves: ScoredMove[] = [];
+  const blocking = getBlockingMask(board, player, false);
   
   // Find opponent's winning positions and blocking positions
   const opponentWinPositions = findWinningPositions(board, opponent);
-  const blockingPositions = findBlockingPositions(board, player);
+  const blockingPositions: CellIndex[] = [];
+  for (let i = 0; i < BOARD_CELLS; i++) {
+    if (blocking.mask[i] === blocking.stamp) blockingPositions.push(i);
+  }
   
   // Combine into critical blocks
   const criticalBlocks = new Set<CellIndex>(blockingPositions);
@@ -401,7 +453,7 @@ export function generateBlockingMoves(
       if (!isValidPlacement(board, pos1) || !isValidPlacement(board, pos2)) continue;
       if (!checkColinearityConstraint(board, pos1, pos2, player)) continue;
       
-      const score = evaluateReinforceMove(board, pos1, pos2, player);
+      const score = evaluateReinforceMove(board, pos1, pos2, player, blocking);
       moves.push({
         move: createReinforceMove(pos1, pos2),
         score: score + 500000, // Very high priority for double blocking
@@ -411,7 +463,7 @@ export function generateBlockingMoves(
   
   // Try single blocking + best other position
   const candidates = getCandidatePositions(board);
-  const scoredCandidates = scoreCandidates(board, candidates, player);
+  const scoredCandidates = scoreCandidates(board, candidates, player, blocking);
   
   for (const blockPos of blockArray) {
     if (!isValidPlacement(board, blockPos)) continue;
@@ -420,7 +472,7 @@ export function generateBlockingMoves(
       if (cand.pos === blockPos) continue;
       if (!checkColinearityConstraint(board, blockPos, cand.pos, player)) continue;
       
-      const score = evaluateReinforceMove(board, blockPos, cand.pos, player);
+      const score = evaluateReinforceMove(board, blockPos, cand.pos, player, blocking);
       moves.push({
         move: createReinforceMove(blockPos, cand.pos),
         score: score + 300000,

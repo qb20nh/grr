@@ -319,8 +319,8 @@ export function createGameEngine(): GameEngine {
         if (winLine) break;
       }
       
-      // Place second stone (skip history too - we'll add the full move manually)
-      gameStore.placeStones([second], winLine, true);
+      // Place second stone and update highlight to include BOTH stones (skip history - we'll record full move below)
+      gameStore.placeStones([first, second], winLine, true);
       
       // Now record the FULL two-stone move in history
       gameStore.recordReinforceMove(positions);

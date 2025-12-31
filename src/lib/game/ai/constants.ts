@@ -41,6 +41,11 @@ export const CONFIG = {
   MAX_DEPTH: 20,              // Maximum search depth
   KILLER_SLOTS: 2,            // Killer moves per depth
   QUIESCENCE_DEPTH: 4,        // Max quiescence plies
+
+  // Null-move pruning (NMP)
+  // Conservative defaults; always disabled under tactical danger inside the search.
+  NMP_MIN_DEPTH: 4,
+  NMP_REDUCTION: 2,
   
   // Time management
   DEFAULT_TIME: 5000,         // Default time per move (ms)

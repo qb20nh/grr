@@ -10,6 +10,7 @@ import {
   moveToLegacy,
   getSearchStats,
   getTranspositionTable,
+  calculateTimeForMove,
   BLACK,
   WHITE,
   CONFIG,
@@ -17,6 +18,7 @@ import {
 import type { Board, Color, Position } from './ai/types';
 import type { SearchSession } from './ai/search';
 import { runTacticalPuzzles } from './ai/puzzles';
+import { runNpsBenchmark } from './ai/benchmark';
 import type { NnueWeights } from './ai/nnue/weights';
 import { getBundledWeightsUrl, loadNnueWeightsOptional } from './ai/nnue/weights';
 
@@ -41,6 +43,15 @@ interface RunPuzzlesRequest {
   type: 'runTacticalPuzzles';
   config?: {
     timeLimitMs?: number;
+  };
+}
+
+interface BenchmarkNpsRequest {
+  type: 'benchmarkNps';
+  config?: {
+    timeLimitMs?: number;
+    maxDepth?: number;
+    iterations?: number;
   };
 }
 
@@ -81,6 +92,11 @@ interface MoveResult {
 interface PuzzlesResult {
   type: 'puzzlesResult';
   summary: ReturnType<typeof runTacticalPuzzles>;
+}
+
+interface BenchmarkNpsResult {
+  type: 'benchmarkNpsResult';
+  summary: ReturnType<typeof runNpsBenchmark>;
 }
 
 /**
@@ -195,12 +211,16 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
 
     const { board, player } = convertState(request.state);
     
-    // Time allocation: in max-strength mode we always use the full default budget,
-    // unless the caller explicitly overrides it.
+    // ---- Time allocation (adaptive, hard-capped) ----
+    // Never exceed 5000ms (user constraint). Still allow returning faster in obvious positions.
     const requestedTime = request.config?.maxTime && request.config.maxTime > 0
       ? request.config.maxTime
       : CONFIG.DEFAULT_TIME;
-    const timeLimit = Math.max(CONFIG.MIN_TIME, Math.min(CONFIG.MAX_TIME, Math.round(requestedTime)));
+    const hardCapMs = 5000;
+    const baseTime = Math.max(CONFIG.MIN_TIME, Math.min(hardCapMs, Math.round(requestedTime)));
+    const adaptiveTime = calculateTimeForMove(board, player, baseTime);
+    // Treat `baseTime` as a hard ceiling for this move (caller intent), and also cap at 5s.
+    const timeLimit = Math.max(CONFIG.MIN_TIME, Math.min(baseTime, hardCapMs, Math.round(adaptiveTime)));
     
     const maxDepth = request.config?.maxDepth ?? CONFIG.MAX_DEPTH;
     
@@ -253,6 +273,18 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
 // Web Worker message handler
 self.onmessage = (e: MessageEvent) => {
   const request = e.data;
+
+  if (request.type === 'benchmarkNps') {
+    const cfg = (request as BenchmarkNpsRequest).config;
+    const summary = runNpsBenchmark({
+      timeLimitMs: cfg?.timeLimitMs,
+      maxDepth: cfg?.maxDepth,
+      iterations: cfg?.iterations,
+    });
+    const result: BenchmarkNpsResult = { type: 'benchmarkNpsResult', summary };
+    self.postMessage(result);
+    return;
+  }
 
   if (request.type === 'ponderStart') {
     void startPondering(request as PonderStartRequest);

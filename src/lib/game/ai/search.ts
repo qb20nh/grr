@@ -12,6 +12,7 @@ import { generateAllMoves, generateTacticalMoves } from './moveGen';
 import { orderMoves, updateKillerMoves, updateHistory, clearMoveOrdering, PVTable, isInterestingMove, getLMRReduction, getFutilityMargin } from './moveOrder';
 import { getTranspositionTable, TranspositionTable } from './transposition';
 import { hasCriticalThreat } from './threats';
+import { createTimeState, shouldStopSearch } from './timeManager';
 import { withTurn } from './zobrist';
 import { threatSpaceSearch } from './tss';
 import type { NnueWeights } from './nnue/weights';
@@ -170,7 +171,7 @@ function alphaBeta(
   
   // Transposition table probe
   const ttKey = withTurn(ctx.board.hash, player);
-  const [ttHit, ttScore, ttBestMove] = tt.tryGetScore(ttKey, depth, alpha, beta);
+  const [ttHit, ttScore, ttBestMove] = tt.tryGetScore(ttKey, depth, alpha, beta, ply);
   if (ttHit) {
     return { completed: true, score: ttScore, move: ttBestMove };
   }
@@ -180,9 +181,68 @@ function alphaBeta(
     const qScore = quiescence(ctx, player, alpha, beta, CONFIG.QUIESCENCE_DEPTH);
     return { completed: !searchAborted, score: qScore, move: null };
   }
+
+  const opponent = getOpponent(player);
+
+  // Lazily computed tactical danger flag (opponent has a critical threat).
+  // We only pay for this check when we are about to apply an aggressive pruning/reduction.
+  const rootUnderCriticalThreat = ply === 0 && hasCriticalThreat(ctx.board, opponent);
+  let cachedDanger: boolean | null = ply === 0 ? rootUnderCriticalThreat : null;
+  const isPruningSafe = (): boolean => {
+    if (cachedDanger === null) {
+      cachedDanger = hasCriticalThreat(ctx.board, opponent);
+    }
+    return !cachedDanger;
+  };
+
+  // Null-move pruning (NMP): if even giving the opponent an extra move doesn't prevent us
+  // from reaching beta, we can safely prune this branch.
+  //
+  // Guardrails:
+  // - Never at root (ply === 0)
+  // - Only at sufficient depth
+  // - Only when static eval is already >= beta (cheap precondition)
+  // - Disabled when the opponent has a critical threat (tactically sharp)
+  // - Disallow consecutive null moves via `nullMoveAllowed`
+  if (
+    nullMoveAllowed &&
+    ply > 0 &&
+    depth >= CONFIG.NMP_MIN_DEPTH &&
+    beta < CONFIG.WIN_SCORE - 1000 // don't prune in (near-)mate windows
+  ) {
+    const staticEval = evaluateSearch(ctx.board, player, ctx.nnue);
+    if (staticEval >= beta) {
+      // Tactical guard: don't allow NMP when we may need an immediate defense.
+      if (isPruningSafe()) {
+        const nullDepth = depth - 1 - CONFIG.NMP_REDUCTION;
+        if (nullDepth >= 0) {
+          const result = alphaBeta(
+            ctx,
+            opponent,
+            nullDepth,
+            -beta,
+            -beta + 1,
+            ply + 1,
+            tt,
+            pvTable,
+            false
+          );
+          const nullScore = -result.score;
+
+          if (!result.completed) {
+            return { completed: false, score: 0, move: null };
+          }
+
+          if (nullScore >= beta) {
+            return { completed: true, score: nullScore, move: null };
+          }
+        }
+      }
+    }
+  }
   
   // Generate and order moves
-  const underCriticalThreat = ply === 0 && hasCriticalThreat(ctx.board, getOpponent(player));
+  const underCriticalThreat = rootUnderCriticalThreat;
   let moves = orderMoves(ctx.board, player, ply, ttBestMove);
 
   // Progressive widening at root: start with a smaller set of top moves and expand with depth.
@@ -233,7 +293,7 @@ function alphaBeta(
       // cannot raise alpha by the margin.
       if (!underCriticalThreat && depth <= 2 && searchedMoves >= 8 && !isCapture && !givesCheck) {
         const margin = getFutilityMargin(depth);
-        if (moveScore + margin <= alpha) {
+        if (isPruningSafe() && moveScore + margin <= alpha) {
           revertMove(ctx, undoInfo, player);
           searchedMoves++;
           continue;
@@ -244,17 +304,20 @@ function alphaBeta(
       if (searchedMoves === 0) {
         // Full window search for first move (expected best move)
         const result = alphaBeta(
-          ctx, getOpponent(player), fullChildDepth,
+          ctx, opponent, fullChildDepth,
           -beta, -alpha, ply + 1, tt, pvTable, true
         );
         score = -result.score;
       } else {
-        const reduction = underCriticalThreat ? 0 : getLMRReduction(searchedMoves, depth, isCapture, givesCheck);
+        let reduction = getLMRReduction(searchedMoves, depth, isCapture, givesCheck);
+        if (reduction > 0 && !isPruningSafe()) {
+          reduction = 0;
+        }
         const reducedDepth = Math.max(0, fullChildDepth - reduction);
 
         // Null window search for other moves
         let result = alphaBeta(
-          ctx, getOpponent(player), reducedDepth,
+          ctx, opponent, reducedDepth,
           -alpha - 1, -alpha, ply + 1, tt, pvTable, true
         );
         score = -result.score;
@@ -262,7 +325,7 @@ function alphaBeta(
         // If we reduced depth and the move looks promising, re-search at full depth.
         if (reduction > 0 && score > alpha && !searchAborted) {
           result = alphaBeta(
-            ctx, getOpponent(player), fullChildDepth,
+            ctx, opponent, fullChildDepth,
             -alpha - 1, -alpha, ply + 1, tt, pvTable, true
           );
           score = -result.score;
@@ -271,7 +334,7 @@ function alphaBeta(
         // Re-search with full window if failed high
         if (score > alpha && score < beta && !searchAborted) {
           result = alphaBeta(
-            ctx, getOpponent(player), fullChildDepth,
+            ctx, opponent, fullChildDepth,
             -beta, -alpha, ply + 1, tt, pvTable, true
           );
           score = -result.score;
@@ -312,7 +375,7 @@ function alphaBeta(
   
   // Store in transposition table
   if (!searchAborted) {
-    tt.store(ttKey, depth, bestScore, flag, bestMove);
+    tt.store(ttKey, depth, bestScore, flag, bestMove, ply);
   }
   
   return {
@@ -362,6 +425,13 @@ export function iterativeDeepening(
   searchTimeLimit = timeLimit;
   searchAborted = false;
   nodesSearched = 0;
+
+  const timeState = timeLimit > 0 ? createTimeState(timeLimit) : null;
+  if (timeState) {
+    // Keep `TimeState` aligned with the hard node-level time limit.
+    timeState.hardLimit = timeLimit;
+    timeState.canExtend = false;
+  }
   
   const tt = options?.tt ?? getTranspositionTable();
   if (!options?.preserveTTAge) {
@@ -459,10 +529,8 @@ export function iterativeDeepening(
       }
     }
     
-    // Check if we have enough time for another iteration
-    const elapsed = Date.now() - searchStartTime;
-    const estimatedNextTime = elapsed * 3; // Rough estimate
-    if (timeLimit > 0 && elapsed + estimatedNextTime > timeLimit * 0.9) {
+    // Stop deepening when the time manager says so.
+    if (timeState && shouldStopSearch(timeState, lastScore)) {
       break;
     }
   }
@@ -568,6 +636,12 @@ class SearchSessionImpl implements SearchSession {
     searchAborted = false;
     nodesSearched = 0;
 
+    const timeState = timeLimitMs > 0 ? createTimeState(timeLimitMs) : null;
+    if (timeState) {
+      timeState.hardLimit = timeLimitMs;
+      timeState.canExtend = false;
+    }
+
     const ctx: SearchContext = { board: this.board, nnue: this.nnue };
     const baseWindow = 200000;
 
@@ -621,9 +695,7 @@ class SearchSessionImpl implements SearchSession {
         if (result.score <= CONFIG.LOSS_SCORE + 100) break;
       }
 
-      const elapsed = Date.now() - searchStartTime;
-      const estimatedNextTime = elapsed * 3;
-      if (timeLimitMs > 0 && elapsed + estimatedNextTime > timeLimitMs * 0.9) {
+      if (timeState && shouldStopSearch(timeState, this.lastScore)) {
         break;
       }
     }
@@ -675,11 +747,15 @@ export function findBestMove(
     };
   }
   
-  for (const { move, score } of moves) {
-    if (score >= CONFIG.WIN_SCORE - 1000) {
+  for (const { move } of moves) {
+    const undo = makeMove(board, move, player);
+    const winner = getWinnerAfterMove(board, move, player);
+    unmakeMove(board, undo, player);
+
+    if (winner === player) {
       return {
         completed: true,
-        score,
+        score: CONFIG.WIN_SCORE,
         move,
         depth: 1,
         nodes: moves.length,
@@ -689,13 +765,67 @@ export function findBestMove(
   
   function opponentHasImmediateWinningMove(): boolean {
     const oppMoves = generateAllMoves(board, opponent);
-    // Winning reinforce moves are scored at WIN_SCORE scale (or higher for single-win).
-    return oppMoves.some(m => m.score >= CONFIG.WIN_SCORE - 1000);
+    for (const { move } of oppMoves) {
+      const undo = makeMove(board, move, opponent);
+      const winner = getWinnerAfterMove(board, move, opponent);
+      unmakeMove(board, undo, opponent);
+      if (winner === opponent) return true;
+    }
+    return false;
   }
 
   // 2. Threat Space Search (tactical prover)
   // Spend a slice of the budget trying to PROVE a forced win or find a forced defense.
   const opponent = getOpponent(player);
+
+  // Root sanity: avoid moves that immediately lose (or allow an immediate opponent win),
+  // even under very small time budgets where deep search may not complete.
+  function sanitizeRootMove(result: SearchResult): SearchResult {
+    if (!result.move) return result;
+
+    const allowsImmediateLoss = (mv: Move): boolean => {
+      const undo = makeMove(board, mv, player);
+      const immediateWinner = getWinnerAfterMove(board, mv, player);
+
+      // If we win immediately, do not second-guess it.
+      if (immediateWinner === player) {
+        unmakeMove(board, undo, player);
+        return false;
+      }
+      // If our move immediately loses (possible for rift due to exact-5 trimming), reject it.
+      if (immediateWinner !== null && immediateWinner !== player) {
+        unmakeMove(board, undo, player);
+        return true;
+      }
+
+      const oppMoves = generateAllMoves(board, opponent);
+      for (const { move } of oppMoves) {
+        const u2 = makeMove(board, move, opponent);
+        const winner = getWinnerAfterMove(board, move, opponent);
+        unmakeMove(board, u2, opponent);
+        if (winner === opponent) {
+          unmakeMove(board, undo, player);
+          return true;
+        }
+      }
+
+      unmakeMove(board, undo, player);
+      return false;
+    };
+
+    if (!allowsImmediateLoss(result.move)) return result;
+
+    // Try alternatives (in movegen order) until we find one that doesn't lose immediately.
+    for (const { move } of moves) {
+      if (!move) continue;
+      if (!allowsImmediateLoss(move)) {
+        return { ...result, move };
+      }
+    }
+
+    return result;
+  }
+
   const tssBudget = Math.max(150, Math.min(2500, Math.floor(timeLimit * 0.4)));
   const tssAttack = threatSpaceSearch(board, player, player, {
     timeLimitMs: Math.floor(tssBudget * 0.6),
@@ -704,13 +834,13 @@ export function findBestMove(
     maxDefenderMoves: 24,
   });
   if (tssAttack.status === 'proven_win' && tssAttack.move) {
-    return {
+    return sanitizeRootMove({
       completed: true,
       score: CONFIG.WIN_SCORE,
       move: tssAttack.move,
       depth: 0,
       nodes: tssAttack.nodes,
-    };
+    });
   }
   
   // If we are under tactical threat, try to find a refutation quickly.
@@ -726,13 +856,13 @@ export function findBestMove(
     });
     if (tssDefense.status === 'not_proven' && tssDefense.move) {
       // Defender found a refutation (within threat-space) - play it.
-      return {
+      return sanitizeRootMove({
         completed: true,
         score: 0,
         move: tssDefense.move,
         depth: 0,
         nodes: tssDefense.nodes,
-      };
+      });
     }
   }
   
@@ -742,50 +872,12 @@ export function findBestMove(
     // Don't reduce search when defending - we need the best defense!
     const result = iterativeDeepening(board, player, timeLimit, maxDepth, { preserveMoveOrdering: true, nnueWeights });
     // iterativeDeepening guarantees a valid move
-    return result;
+    return sanitizeRootMove(result);
   }
   
   // 4. Full search
   const result = iterativeDeepening(board, player, timeLimit, maxDepth, { preserveMoveOrdering: true, nnueWeights });
-
-  // Root sanity: if the chosen move allows an immediate opponent win, fall back to next-best root candidates.
-  if (result.move) {
-    const allowsImmediateLoss = (mv: Move): boolean => {
-      const undo = makeMove(board, mv, player);
-      const oppWins = generateAllMoves(board, opponent).some(m => m.score >= CONFIG.WIN_SCORE - 1000);
-      unmakeMove(board, undo, player);
-      return oppWins;
-    };
-
-    if (allowsImmediateLoss(result.move)) {
-      const seen = new Set<string>();
-      const candidates: Move[] = [];
-
-      const push = (m: Move) => {
-        const key = moveToKey(m);
-        if (seen.has(key)) return;
-        seen.add(key);
-        candidates.push(m);
-      };
-
-      // Prefer the searched best move first, then top-scored alternatives.
-      push(result.move);
-      for (const m of moves.slice(0, 8)) {
-        push(m.move);
-      }
-
-      for (const m of candidates) {
-        if (!allowsImmediateLoss(m)) {
-          if (m !== result.move) {
-            return { ...result, move: m };
-          }
-          break;
-        }
-      }
-    }
-  }
-
-  return result;
+  return sanitizeRootMove(result);
 }
 
 /**

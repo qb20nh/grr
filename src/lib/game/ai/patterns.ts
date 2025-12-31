@@ -28,14 +28,15 @@ export function scanLine(
   board: Board,
   pos: CellIndex,
   dirIdx: number,
-  player: Color
+  player: Color,
+  ignoreKo: boolean = false
 ): LineInfo {
   const [dRow, dCol] = DIRECTIONS[dirIdx];
   const startRow = Math.floor(pos / BOARD_SIZE);
   const startCol = pos % BOARD_SIZE;
 
   const isOpenForPlacement = (idx: CellIndex): boolean =>
-    board.cells[idx] === EMPTY && board.koPosition !== idx;
+    board.cells[idx] === EMPTY && (ignoreKo || board.koPosition !== idx);
 
   const maxRun = 6; // enough to detect overline/long lines cheaply
 

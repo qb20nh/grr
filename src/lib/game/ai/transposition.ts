@@ -91,7 +91,8 @@ export class TranspositionTable {
     depth: number,
     score: number,
     flag: TTFlag,
-    bestMove: Move | null
+    bestMove: Move | null,
+    ply: number
   ): void {
     const index = this.getIndex(hash);
     const existingDepth = this.depths[index];
@@ -119,7 +120,9 @@ export class TranspositionTable {
     ) {
       this.keys[index] = hash;
       this.depths[index] = depth;
-      this.scores[index] = score;
+      // Store score in a ply-neutral form for mate-distance values so TT remains valid
+      // across transpositions reached at different plies.
+      this.scores[index] = toTTScore(score, ply);
       this.flags[index] = flagToCode(flag);
       this.moves[index] = encodeMove(bestMove);
       this.ages[index] = this.currentAge;
@@ -142,7 +145,8 @@ export class TranspositionTable {
     hash: bigint,
     depth: number,
     alpha: number,
-    beta: number
+    beta: number,
+    ply: number
   ): [boolean, number, Move | null] {
     const index = this.getIndex(hash);
     const storedDepth = this.depths[index];
@@ -167,7 +171,10 @@ export class TranspositionTable {
       return [false, 0, bestMove];
     }
     
-    const score = this.scores[index];
+    // Convert stored TT score into the current node's score domain.
+    // This matters for mate-distance (WIN_SCORE/LOSS_SCORE +/- ply) where ply is not
+    // part of the TT key.
+    const score = fromTTScore(this.scores[index], ply);
     const flag = codeToFlag(this.flags[index]);
     
     if (flag === 'exact') {
@@ -235,6 +242,31 @@ export class TranspositionTable {
     this.misses = 0;
     this.collisions = 0;
   }
+}
+
+// ---- Mate-distance score normalization ----
+// Search encodes faster wins/losses by shifting WIN_SCORE/LOSS_SCORE by (ply+1).
+// Ply is NOT part of the TT key, so we must store such scores in a ply-neutral form.
+const MATE_SCORE_MARGIN = 10000;
+
+function isWinScore(score: number): boolean {
+  return score >= CONFIG.WIN_SCORE - MATE_SCORE_MARGIN;
+}
+
+function isLossScore(score: number): boolean {
+  return score <= CONFIG.LOSS_SCORE + MATE_SCORE_MARGIN;
+}
+
+function toTTScore(nodeScore: number, ply: number): number {
+  if (isWinScore(nodeScore)) return nodeScore + ply;
+  if (isLossScore(nodeScore)) return nodeScore - ply;
+  return nodeScore;
+}
+
+function fromTTScore(storedScore: number, ply: number): number {
+  if (isWinScore(storedScore)) return storedScore - ply;
+  if (isLossScore(storedScore)) return storedScore + ply;
+  return storedScore;
 }
 
 function flagToCode(flag: TTFlag): number {
