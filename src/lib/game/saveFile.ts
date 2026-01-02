@@ -79,8 +79,10 @@ function parseMove(line: string): MoveRecord {
  */
 export function serializeGame(state: GameState): string {
   const now = new Date().toISOString();
-  const blackPlayer = state.gameMode === 'vs-ai' && state.aiColor === 'black' ? 'ai' : 'human';
-  const whitePlayer = state.gameMode === 'vs-ai' && state.aiColor === 'white' ? 'ai' : 'human';
+  const blackPlayer =
+    state.gameMode === 'ai-vs-ai' ? 'ai' : state.gameMode === 'vs-ai' && state.aiColor === 'black' ? 'ai' : 'human';
+  const whitePlayer =
+    state.gameMode === 'ai-vs-ai' ? 'ai' : state.gameMode === 'vs-ai' && state.aiColor === 'white' ? 'ai' : 'human';
   
   const header = [
     FORMAT_VERSION,

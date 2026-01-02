@@ -5,19 +5,32 @@
 
 import {
   boardFrom2D,
+  boardTo2D,
+  createReinforceMove,
+  createRiftMove,
+  createSingleWinMove,
   findBestMove,
   createSearchSession,
   moveToLegacy,
+  toIndex,
   moveToKey,
   makeMove,
   unmakeMove,
   cloneBoard,
   getOpponent,
+  getWinnerAfterMove,
+  validateReinforce,
+  validateRift,
+  isValidPlacement,
+  isSingleWinMove,
+  checkWinAt,
+  generateAllMoves,
+  createSharedTranspositionTableBacking,
   getTranspositionTable,
-  calculateTimeForMove,
   BLACK,
   WHITE,
   CONFIG,
+  BOARD_SIZE,
 } from './ai/index';
 import type { Board, Color, Move, Position, UndoInfo } from './ai/types';
 import type { SearchSession } from './ai/search';
@@ -25,12 +38,19 @@ import { runTacticalPuzzles } from './ai/puzzles';
 import { runNpsBenchmark } from './ai/benchmark';
 import type { NnueWeights } from './ai/nnue/weights';
 import { getBundledWeightsUrl, loadNnueWeightsOptional } from './ai/nnue/weights';
+import type { Dihedral } from './ai/dihedral';
+import { randomDihedral, applyInverseDihedralPos, transformLegacyBoard, transformLegacyKo } from './ai/dihedral';
+import type { OpeningPreset } from './types';
+import type { SharedTranspositionTableBacking } from './ai/index';
+import { getOpeningPly1ReplyMoveFilter, getOpeningRootMoveFilter } from './ai/openingFilters';
 
 interface WorkerState {
   board: (string | null)[][];
   aiColor: string | null;
   playerToMove?: 'black' | 'white';
   lastRiftedPosition: { row: number; col: number } | null;
+  openingPreset?: OpeningPreset;
+  moveIndex?: number;
 }
 
 interface FindMoveRequest {
@@ -115,6 +135,22 @@ interface MoveResult {
       };
     };
   } | null;
+  error?: {
+    message: string;
+    stack?: string;
+    context?: Record<string, unknown>;
+  };
+}
+
+interface UltraAnalyzeRootMovesResult {
+  type: 'analyzeRootMovesResult';
+  best: {
+    move: Move;
+    score: number;
+    depth: number;
+    nodes: number;
+  } | null;
+  totalNodes: number;
 }
 
 interface PuzzlesResult {
@@ -127,24 +163,97 @@ interface BenchmarkNpsResult {
   summary: ReturnType<typeof runNpsBenchmark>;
 }
 
+const CENTER_RC = Math.floor(BOARD_SIZE / 2);
+const CENTER_INDEX = toIndex(CENTER_RC, CENTER_RC);
+
+// ---- Ultra shared-TT backing (reuse to avoid repeated large SAB allocations) ----
+let ultraSharedTTBacking: SharedTranspositionTableBacking | null = null;
+
+function getUltraSharedTTBackingBestEffort(): SharedTranspositionTableBacking | null {
+  if (ultraSharedTTBacking) return ultraSharedTTBacking;
+
+  // Best effort: try full TT size first, then shrink until it fits.
+  // This prevents Ultra from degrading into "instamove" due to allocation failure.
+  const maxPow = Math.floor(Math.log2(CONFIG.TT_SIZE));
+  const minPow = 18; // 262k entries (~small but safe)
+  for (let pow = maxPow; pow >= minPow; pow--) {
+    const size = 1 << pow;
+    try {
+      ultraSharedTTBacking = createSharedTranspositionTableBacking(size);
+      return ultraSharedTTBacking;
+    } catch {
+      // try smaller
+    }
+  }
+
+  return null;
+}
+
+function normalizeMoveIndex(value: unknown): number {
+  if (typeof value !== 'number') return 0;
+  if (!Number.isFinite(value) || value < 0) return 0;
+  return Math.floor(value);
+}
+
+function normalizeOpeningPreset(value: unknown): OpeningPreset {
+  if (value === 'long-pro' || value === 'standard-empty' || value === 'legacy-black-center-white-first') {
+    return value;
+  }
+  return 'long-pro';
+}
+
 /**
  * Convert worker state to internal Board representation
  */
-function convertState(state: WorkerState): { board: Board; player: Color } {
+function convertState(state: WorkerState): { board: Board; player: Color; openingPreset: OpeningPreset; moveIndex: number } {
+  const d = activeDihedral ?? { rot: 0, reflect: false };
+  const board2d = activeDihedral ? transformLegacyBoard(state.board, d) : state.board;
+  const koPos = activeDihedral ? transformLegacyKo(state.lastRiftedPosition, d) : state.lastRiftedPosition;
+
   // Convert lastRiftedPosition to index
   let koPosition: number | null = null;
-  if (state.lastRiftedPosition) {
-    koPosition = state.lastRiftedPosition.row * 15 + state.lastRiftedPosition.col;
+  if (koPos) {
+    koPosition = koPos.row * 15 + koPos.col;
   }
   
   // Convert 2D board to internal format
-  const board = boardFrom2D(state.board, koPosition);
+  const board = boardFrom2D(board2d, koPosition);
   
   // Determine player color
   const toMove = state.playerToMove ?? state.aiColor;
   const player: Color = toMove === 'black' ? BLACK : WHITE;
   
-  return { board, player };
+  const openingPreset = normalizeOpeningPreset(state.openingPreset);
+  const moveIndex = normalizeMoveIndex(state.moveIndex);
+
+  return { board, player, openingPreset, moveIndex };
+}
+
+// ---- Dihedral randomization (per move) ----
+let activeDihedral: Dihedral | null = null;
+
+function ensureActiveDihedral(): Dihedral {
+  if (!activeDihedral) {
+    activeDihedral = randomDihedral();
+  }
+  return activeDihedral;
+}
+
+function clearActiveDihedral(): void {
+  activeDihedral = null;
+}
+
+function untransformPositions(positions: { row: number; col: number }[]): { row: number; col: number }[] {
+  if (!activeDihedral) return positions;
+  const d = activeDihedral;
+  return positions.map(p => applyInverseDihedralPos(p, d));
+}
+
+function untransformLogMove(
+  m: { action: 'reinforce' | 'rift'; positions: { row: number; col: number }[] } | null
+): { action: 'reinforce' | 'rift'; positions: { row: number; col: number }[] } | null {
+  if (!m) return null;
+  return { action: m.action, positions: untransformPositions(m.positions) };
 }
 
 // ---- NNUE weights (optional) ----
@@ -165,7 +274,7 @@ let ponderReplySession: SearchSession | null = null;
 let ponderSliceMs: number = 60;
 let ponderMaxDepth: number = CONFIG.MAX_DEPTH;
 let ponderDebug = false;
-let ponderLatestPosition: { board: Board; player: Color } | null = null;
+let ponderLatestPosition: { board: Board; player: Color; openingPreset: OpeningPreset; moveIndex: number } | null = null;
 
 let ponderDeadlineMs = 0;
 
@@ -200,6 +309,24 @@ function moveToLogObject(move: Move | null): { action: 'reinforce' | 'rift'; pos
   return { action: move.action, positions: moveToLegacy(move) };
 }
 
+function isMoveLegal(board: Board, move: Move, player: Color): boolean {
+  if (move.action === 'rift') {
+    return validateRift(board, move.pos, player);
+  }
+
+  if (isSingleWinMove(move)) {
+    if (!isValidPlacement(board, move.pos1)) return false;
+    // Temporarily place the stone (without touching hash / counts) and test exact-5.
+    const prev = board.cells[move.pos1];
+    board.cells[move.pos1] = player;
+    const wins = checkWinAt(board, move.pos1, player);
+    board.cells[move.pos1] = prev;
+    return wins;
+  }
+
+  return validateReinforce(board, move.pos1, move.pos2, player);
+}
+
 function resetPonderingState(): void {
   ponderActive = false;
   ponderRootSession = null;
@@ -220,20 +347,28 @@ function resetPonderingState(): void {
 function refreshPredictedLine(): void {
   if (!ponderLatestPosition || !ponderRootSession) return;
 
+  // Special-case: Long Pro forced opening (Black must play center single stone on move 0).
   const best = ponderRootSession.getBest();
   const bestMove = best.move;
-  if (!bestMove) return;
+  const forcedLongProCenter =
+    ponderLatestPosition.openingPreset === 'long-pro' &&
+    ponderLatestPosition.moveIndex === 0 &&
+    ponderLatestPosition.player === BLACK;
+  const predictedMove = forcedLongProCenter ? createSingleWinMove(CENTER_INDEX) : bestMove;
+  if (!predictedMove) return;
 
-  const nextKey = moveToKey(bestMove);
+  const nextKey = moveToKey(predictedMove);
   if (nextKey === ponderPredictedMoveKey && ponderReplySession) return;
 
   ponderPredictedMoveKey = nextKey;
 
   // Build predicted child position (after predicted human move).
   const child = cloneBoard(ponderLatestPosition.board);
-  makeMove(child, bestMove, ponderLatestPosition.player);
+  makeMove(child, predictedMove, ponderLatestPosition.player);
   const replyPlayer = getOpponent(ponderLatestPosition.player);
   ponderPredictedChildHash = child.hash.toString();
+  const replyMoveIndex = ponderLatestPosition.moveIndex + 1;
+  const replyRootFilter = getOpeningRootMoveFilter(ponderLatestPosition.openingPreset, replyMoveIndex, replyPlayer);
 
   // Reset reply totals when the predicted line changes.
   ponderReplyTotalsNodes = 0;
@@ -241,7 +376,7 @@ function refreshPredictedLine(): void {
 
   const tt = getTranspositionTable();
   if (!ponderReplySession) {
-    ponderReplySession = createSearchSession(child, replyPlayer, ponderMaxDepth, tt, ponderNnueWeights);
+    ponderReplySession = createSearchSession(child, replyPlayer, ponderMaxDepth, tt, ponderNnueWeights, replyRootFilter);
   } else {
     ponderReplySession.setPosition(child, replyPlayer);
   }
@@ -341,14 +476,16 @@ async function runPonderLoop(generation: number): Promise<void> {
 }
 
 async function startPondering(request: PonderStartRequest): Promise<void> {
-  const { board, player } = convertState(request.state);
+  // Sample a new random dihedral for the upcoming AI move (and keep it stable across pondering).
+  activeDihedral = randomDihedral();
+  const { board, player, openingPreset, moveIndex } = convertState(request.state);
   ponderSliceMs = Math.max(10, Math.min(200, Math.floor(request.config?.sliceMs ?? 60)));
   ponderMaxDepth = request.config?.maxDepth ?? CONFIG.MAX_DEPTH;
   ponderDebug = Boolean(request.config?.debug);
 
   resetPonderingState();
   ponderActive = true;
-  ponderLatestPosition = { board, player };
+  ponderLatestPosition = { board, player, openingPreset, moveIndex };
   ponderDeadlineMs = Date.now() + PONDER_MAX_TIME_MS;
   const myGen = ponderGeneration;
   lastPonderSummary = null;
@@ -360,7 +497,7 @@ async function startPondering(request: PonderStartRequest): Promise<void> {
   ponderNnueWeights = nnueWeights;
 
   const tt = getTranspositionTable();
-  ponderRootSession = createSearchSession(board, player, ponderMaxDepth, tt, nnueWeights);
+  ponderRootSession = createSearchSession(board, player, ponderMaxDepth, tt, nnueWeights, null);
   refreshPredictedLine();
 
   if (ponderDebug) {
@@ -378,9 +515,11 @@ async function startPondering(request: PonderStartRequest): Promise<void> {
 }
 
 function updatePonderPosition(request: PositionUpdateRequest): void {
-  const { board, player } = convertState(request.state);
+  // Keep the same dihedral for this upcoming move; if absent (shouldn't happen), create one.
+  ensureActiveDihedral();
+  const { board, player, openingPreset, moveIndex } = convertState(request.state);
   ponderMaxDepth = request.config?.maxDepth ?? ponderMaxDepth;
-  ponderLatestPosition = { board, player };
+  ponderLatestPosition = { board, player, openingPreset, moveIndex };
 
   ponderRootTotalsNodes = 0;
   ponderRootTotalsMs = 0;
@@ -414,27 +553,52 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
     // Stop background pondering loop, but KEEP ponder sessions for possible reuse on a ponder hit.
     pausePonderingLoop();
 
-    const { board, player } = convertState(request.state);
+    // Ensure a dihedral exists for this move (AI-vs-AI has no ponderStart).
+    ensureActiveDihedral();
+    const { board, player, openingPreset, moveIndex } = convertState(request.state);
+    const rootMoveFilter = getOpeningRootMoveFilter(openingPreset, moveIndex, player);
+    const ply1ReplyMoveFilter = getOpeningPly1ReplyMoveFilter(openingPreset, moveIndex, player);
     
-    // ---- Time allocation (adaptive, hard-capped) ----
-    // Never exceed 5000ms (user constraint). Still allow returning faster in obvious positions.
-    const requestedTime = request.config?.maxTime && request.config.maxTime > 0
-      ? request.config.maxTime
-      : CONFIG.DEFAULT_TIME;
+    // ---- Time allocation (hard-capped) ----
+    // Default behavior is to use the caller's full per-move budget (clamped),
+    // and rely on the search to terminate early only for forced outcomes.
+    // Spectate can request "Ultra" (maxTime=0) which triggers a parallel, 60s-capped root-split search.
+    const requestedMaxTime = request.config?.maxTime;
+    const ultraThink = requestedMaxTime === 0;
+    const requestedTime =
+      typeof requestedMaxTime === 'number' && requestedMaxTime > 0
+        ? requestedMaxTime
+        : CONFIG.DEFAULT_TIME;
     const hardCapMs = 5000;
     const baseTime = Math.max(CONFIG.MIN_TIME, Math.min(hardCapMs, Math.round(requestedTime)));
-    const adaptiveTime = calculateTimeForMove(board, player, baseTime);
-    // Treat `baseTime` as a hard ceiling for this move (caller intent), and also cap at 5s.
-    const timeLimit = Math.max(CONFIG.MIN_TIME, Math.min(baseTime, hardCapMs, Math.round(adaptiveTime)));
+    const timeLimit = baseTime;
     
     const maxDepth = request.config?.maxDepth ?? CONFIG.MAX_DEPTH;
     
     if (request.config?.debug) {
       console.log('[AI Worker] Starting search', {
-        timeLimit,
+        timeLimit: ultraThink ? 'ultra(60s)' : timeLimit,
         maxDepth,
         stoneCount: board.blackCount + board.whiteCount,
       });
+    }
+
+    // Special-case: Long Pro forced opening move (Black must play center single stone on move 0).
+    if (openingPreset === 'long-pro' && moveIndex === 0 && player === BLACK) {
+      // Clear ponder sessions after using them (next turn will start new pondering).
+      resetPonderingState();
+      clearActiveDihedral();
+      return {
+        type: 'result',
+        move: {
+          action: 'reinforce',
+          positions: untransformPositions([{ row: CENTER_RC, col: CENTER_RC }]),
+          score: 0,
+          depth: 0,
+          nodes: 0,
+          time: Date.now() - startTime,
+        },
+      };
     }
 
     const nnueWeights = await getNnueWeights();
@@ -449,29 +613,565 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
     
     // Find best move (prefer continuing the predicted-line reply session on ponder hit).
     let usedReplySession = false;
-    let result: ReturnType<typeof findBestMove>;
-    if (predictedHit === true && ponderReplySession && ponderPredictedChildHash === board.hash.toString()) {
-      usedReplySession = true;
-      result = ponderReplySession.searchSlice(timeLimit);
+    // Initialize defensively so TypeScript can prove we never read before assignment.
+    let result: ReturnType<typeof findBestMove> = {
+      completed: true,
+      score: 0,
+      move: null,
+      depth: 0,
+      nodes: 0,
+    };
+    let nodes = 0;
+
+    if (ultraThink) {
+      // ---- UltraThink: 60s capped + all cores ----
+      const ULTRA_MAX_TIME_MS = 60000;
+      const deadlineMs = Date.now() + ULTRA_MAX_TIME_MS;
+
+      const allRootMoves = generateAllMoves(board, player);
+      // Opening-aware root filtering (with safety fallback if it eliminates everything).
+      const rootMoves = rootMoveFilter
+        ? (() => {
+            const filtered = allRootMoves.filter(m => rootMoveFilter(m.move));
+            return filtered.length > 0 ? filtered : allRootMoves;
+          })()
+        : allRootMoves;
+
+      // Fast-path: immediate winning root move (avoid spawning any pool).
+      for (const { move } of rootMoves) {
+        const undo = makeMove(board, move, player);
+        const winner = getWinnerAfterMove(board, move, player);
+        unmakeMove(board, undo, player);
+        if (winner === player) {
+          result = {
+            completed: true,
+            score: CONFIG.WIN_SCORE,
+            move,
+            depth: 1,
+            nodes: rootMoves.length,
+          };
+          nodes = rootMoves.length;
+          // Clear ponder sessions after using them (next turn will start new pondering).
+          resetPonderingState();
+          return {
+            type: 'result',
+            move: {
+              action: move.action,
+              positions: moveToLegacy(move),
+              score: CONFIG.WIN_SCORE,
+              depth: 1,
+              nodes,
+              time: Date.now() - startTime,
+              ponder: ponder
+                ? {
+                    nodes: ponder.nodes,
+                    timeMs: ponder.timeMs,
+                    bestDepth: ponder.bestDepth,
+                    bestScore: ponder.bestScore,
+                    bestMove: ponder.bestMove,
+                    replyNodes: ponder.replyNodes,
+                    replyTimeMs: ponder.replyTimeMs,
+                    replyBestDepth: ponder.replyBestDepth,
+                    replyBestScore: ponder.replyBestScore,
+                    replyBestMove: ponder.replyBestMove,
+                    predictedMoveKey: ponder.predictedMoveKey,
+                    predictedHit,
+                    usedReplySession,
+                    tt: {
+                      hits: 0,
+                      misses: 0,
+                      collisions: 0,
+                      hitsCurrentAge: 0,
+                      hitsPrevAge: 0,
+                      hitsOtherAge: 0,
+                      reuseFromPrevPct: 0,
+                    },
+                  }
+                : undefined,
+            },
+          };
+        }
+      }
+
+      const movesOnly: Move[] = rootMoves.map(m => m.move);
+
+      // Cross-origin isolation is required for SharedArrayBuffer (shared TT).
+      const canUseSharedTT =
+        typeof SharedArrayBuffer !== 'undefined' &&
+        typeof Atomics !== 'undefined' &&
+        (globalThis as unknown as { crossOriginIsolated?: boolean }).crossOriginIsolated === true;
+
+      // Worker pool sizing (use all available threads).
+      const hc = (globalThis as unknown as { navigator?: { hardwareConcurrency?: number } }).navigator?.hardwareConcurrency;
+      const workerCount = Math.max(1, Math.min(Math.floor(hc ?? 1), movesOnly.length));
+
+      // The Ultra sub-workers must analyze the same dihedral-transformed position as the main worker.
+      // We send a legacy 2D board reconstructed from the internal `Board`, which is already transformed.
+      const koIndex = board.koPosition;
+      const lastRiftedPosition =
+        typeof koIndex === 'number'
+          ? { row: Math.floor(koIndex / BOARD_SIZE), col: koIndex % BOARD_SIZE }
+          : null;
+      const ultraState = {
+        board: boardTo2D(board),
+        playerToMove: player === BLACK ? 'black' : 'white',
+        lastRiftedPosition,
+        openingPreset,
+        moveIndex,
+      } as const;
+
+      const waitForType = (w: Worker, expectedType: string, timeoutMs: number): Promise<any | null> =>
+        new Promise(resolve => {
+          const onMsg = (ev: MessageEvent) => {
+            const data = ev.data as any;
+            if (!data || data.type !== expectedType) return;
+            cleanup();
+            resolve(data);
+          };
+          const onErr = () => {
+            cleanup();
+            resolve(null);
+          };
+          const timer = setTimeout(() => {
+            cleanup();
+            resolve(null);
+          }, Math.max(1, timeoutMs));
+          const cleanup = () => {
+            clearTimeout(timer);
+            w.removeEventListener('message', onMsg);
+            w.removeEventListener('error', onErr);
+          };
+          w.addEventListener('message', onMsg);
+          w.addEventListener('error', onErr, { once: true });
+        });
+
+      const waitForRootMoveResult = (w: Worker, requestId: number, timeoutMs: number): Promise<any | null> =>
+        new Promise(resolve => {
+          const onMsg = (ev: MessageEvent) => {
+            const data = ev.data as any;
+            if (!data || data.type !== 'searchRootMoveResult') return;
+            if (data.requestId !== requestId) return;
+            cleanup();
+            resolve(data);
+          };
+          const onErr = () => {
+            cleanup();
+            resolve(null);
+          };
+          const timer = setTimeout(() => {
+            cleanup();
+            resolve(null);
+          }, Math.max(1, timeoutMs));
+          const cleanup = () => {
+            clearTimeout(timer);
+            w.removeEventListener('message', onMsg);
+            w.removeEventListener('error', onErr);
+          };
+          w.addEventListener('message', onMsg);
+          w.addEventListener('error', onErr, { once: true });
+        });
+
+      let ultraPvsRequestId = 1;
+      const runRootMove = async (
+        w: Worker,
+        rootMove: Move,
+        depth: number,
+        alpha: number,
+        beta: number,
+        deadline: number
+      ): Promise<{ completed: boolean; score: number; nodes: number } | null> => {
+        const waitMs = Math.max(0, deadline - Date.now()) + 50;
+        const requestId = ultraPvsRequestId++;
+        const wait = waitForRootMoveResult(w, requestId, waitMs);
+        w.postMessage({
+          type: 'searchRootMove',
+          requestId,
+          rootMove,
+          depth,
+          alpha,
+          beta,
+          deadlineMs: deadline,
+        });
+        const data = await wait;
+        if (!data || data.type !== 'searchRootMoveResult') return null;
+        return {
+          completed: Boolean(data.completed),
+          score: Number(data.score ?? 0),
+          nodes: Number(data.nodes ?? 0),
+        };
+      };
+
+      const runUltraRootSplitFallback = async (): Promise<void> => {
+        // ---- Fallback: existing parallel root-split (no shared SAB) ----
+        // Keep total TT memory roughly bounded: divide TT size across the pool (power-of-two).
+        const ttPow = Math.log2(CONFIG.TT_SIZE);
+        const wcPow = Math.ceil(Math.log2(workerCount));
+        const perWorkerPow = Math.max(16, Math.floor(ttPow) - wcPow);
+        const ttSize = 1 << perWorkerPow;
+
+        const buckets: Move[][] = Array.from({ length: workerCount }, () => []);
+        for (let i = 0; i < movesOnly.length; i++) {
+          buckets[i % workerCount]!.push(movesOnly[i]);
+        }
+
+        const workers: Worker[] = [];
+        const results: Array<{ best: UltraAnalyzeRootMovesResult['best']; totalNodes: number } | null> = [];
+
+        // Give workers a small grace window beyond the nominal deadline to post their final result.
+        // (They search until `deadlineMs`, then post; terminating exactly at the deadline can drop the message.)
+        const graceMs = 150;
+        const waitUntilMs = deadlineMs + graceMs;
+
+        const waitFor = (w: Worker, idx: number): Promise<void> =>
+          new Promise(resolve => {
+            const onMsg = (ev: MessageEvent) => {
+              const data = ev.data as UltraAnalyzeRootMovesResult;
+              if (!data || data.type !== 'analyzeRootMovesResult') return;
+              cleanup();
+              results[idx] = { best: data.best, totalNodes: Number(data.totalNodes ?? 0) };
+              resolve();
+            };
+            const onErr = () => {
+              cleanup();
+              resolve();
+            };
+            const timer = setTimeout(() => {
+              cleanup();
+              resolve();
+            }, Math.max(1, waitUntilMs - Date.now()));
+            const cleanup = () => {
+              clearTimeout(timer);
+              w.removeEventListener('message', onMsg);
+              w.removeEventListener('error', onErr);
+            };
+            w.addEventListener('message', onMsg);
+            w.addEventListener('error', onErr, { once: true });
+          });
+
+        const promises: Promise<void>[] = [];
+        for (let i = 0; i < workerCount; i++) {
+          const subset = buckets[i]!;
+          if (subset.length === 0) {
+            results[i] = null;
+            continue;
+          }
+          const w = new Worker(new URL('./ai/ultraSearch.worker.ts', import.meta.url), { type: 'module' });
+          workers.push(w);
+          promises.push(waitFor(w, i));
+          w.postMessage({
+            type: 'analyzeRootMoves',
+            state: ultraState,
+            rootMoves: subset,
+            maxDepth,
+            deadlineMs,
+            ttSize,
+          });
+        }
+
+        // Wait until all workers respond OR the post-deadline grace window expires.
+        await Promise.allSettled(promises);
+
+        for (const w of workers) w.terminate();
+
+        // Reduce to a best move (prefer deeper, then score).
+        let localNodes = 0;
+        let best: { move: Move; score: number; depth: number; nodes: number } | null = null;
+        for (const entry of results) {
+          if (!entry) continue;
+          localNodes += entry.totalNodes;
+          const r = entry.best;
+          if (!r) continue;
+          if (!best) {
+            best = r;
+            continue;
+          }
+          if ((r.depth ?? 0) !== (best.depth ?? 0)) {
+            if ((r.depth ?? 0) > (best.depth ?? 0)) best = r;
+            continue;
+          }
+          if ((r.score ?? 0) > (best.score ?? 0)) {
+            best = r;
+          } else if (best && (r.score ?? 0) === (best.score ?? 0)) {
+            if (Math.random() < 0.5) best = r;
+          }
+        }
+
+        if (!best) {
+          // Last-resort: run a local search for whatever time remains (at least a tiny slice),
+          // so we don't return a misleading "all zeros" stat line.
+          const remainingMs = Math.max(25, deadlineMs - Date.now());
+          const local = findBestMove(board, player, remainingMs, maxDepth, nnueWeights, rootMoveFilter, ply1ReplyMoveFilter);
+          result = local;
+          nodes = local.nodes ?? 0;
+        } else {
+          nodes = localNodes;
+          result = {
+            completed: true,
+            score: best.score,
+            move: best.move,
+            depth: best.depth,
+            nodes,
+          };
+        }
+      };
+
+      let usedSharedTT = false;
+      let didComputeUltraResult = false;
+
+      if (canUseSharedTT) {
+        // ---- Shared-TT + parallel root-PVS ----
+        const backing = getUltraSharedTTBackingBestEffort();
+        if (!backing) {
+          await runUltraRootSplitFallback();
+          usedSharedTT = false;
+          didComputeUltraResult = true;
+        } else {
+          try {
+            usedSharedTT = true;
+
+            const workers: Worker[] = [];
+            // Initialize workers with listeners armed first (avoid missing fast replies).
+            const initDeadline = Math.min(deadlineMs, Date.now() + 2000);
+            const initWaitMs = Math.max(1, initDeadline - Date.now());
+            const readyPromises: Promise<boolean>[] = [];
+            for (let i = 0; i < workerCount; i++) {
+              const w = new Worker(new URL('./ai/ultraPvs.worker.ts', import.meta.url), { type: 'module' });
+              workers.push(w);
+              const wait = waitForType(w, 'ultraPvsReady', initWaitMs).then(msg => Boolean(msg && msg.type === 'ultraPvsReady'));
+              readyPromises.push(wait);
+              w.postMessage({ type: 'initSharedTT', backing });
+            }
+
+            const ready = await Promise.all(readyPromises);
+
+            const activeWorkers: Worker[] = [];
+            for (let i = 0; i < workers.length; i++) {
+              const w = workers[i]!;
+              if (!ready[i]) {
+                w.terminate();
+                continue;
+              }
+              activeWorkers.push(w);
+            }
+
+            if (activeWorkers.length === 0) {
+              // If we couldn't bring up the shared pool, fall back to the root-split Ultra.
+              usedSharedTT = false;
+              await runUltraRootSplitFallback();
+              didComputeUltraResult = true;
+            } else {
+              // Broadcast position once.
+              const posPromises: Promise<boolean>[] = [];
+              for (const w of activeWorkers) {
+                const wait = waitForType(w, 'ultraPvsPositionReady', 500).then(msg => Boolean(msg && msg.type === 'ultraPvsPositionReady'));
+                posPromises.push(wait);
+                w.postMessage({ type: 'setPosition', state: ultraState });
+              }
+              await Promise.all(posPromises);
+
+              let moveList: Move[] = movesOnly.slice();
+              let bestMoveSoFar: Move = moveList[0]!;
+              let bestScoreSoFar = 0;
+              let bestDepthSoFar = 0;
+              let totalNodes = 0;
+
+              // Ultra wants to keep deepening until the deadline; lift the depth cap.
+              const ultraMaxDepth = Math.max(maxDepth, 64);
+
+              for (let depth = 1; depth <= ultraMaxDepth; depth++) {
+                const now = Date.now();
+                if (now >= deadlineMs) break;
+                const depthDeadline = deadlineMs;
+
+                // 1) Search PV move first (full window).
+                const pvWorker = activeWorkers[0]!;
+                const pvRes = await runRootMove(
+                  pvWorker,
+                  bestMoveSoFar,
+                  depth,
+                  -CONFIG.INFINITY,
+                  CONFIG.INFINITY,
+                  depthDeadline
+                );
+                if (!pvRes || !pvRes.completed) break;
+                totalNodes += pvRes.nodes;
+
+                let bestAtDepth = pvRes.score;
+                let bestMoveAtDepth = bestMoveSoFar;
+                let alpha = bestAtDepth;
+
+                // 2) Search remaining moves at null-window in parallel.
+                const others = moveList.filter(m => m !== bestMoveSoFar);
+                const nullBeta = Math.min(CONFIG.INFINITY, alpha + 1);
+
+                let next = 0;
+                const nullResults: Array<{ move: Move; score: number; nodes: number; completed: boolean }> = [];
+
+                const workerLoop = async (w: Worker): Promise<void> => {
+                  while (true) {
+                    const i = next++;
+                    if (i >= others.length) return;
+                    if (Date.now() >= depthDeadline) return;
+                    const mv = others[i]!;
+                    const r = await runRootMove(w, mv, depth, alpha, nullBeta, depthDeadline);
+                    if (!r) return;
+                    nullResults.push({ move: mv, score: r.score, nodes: r.nodes, completed: r.completed });
+                  }
+                };
+
+                await Promise.all(activeWorkers.map(w => workerLoop(w)));
+
+                // Collect + decide which moves need a full re-search.
+                const failHigh = nullResults
+                  .filter(r => r.completed && r.score > alpha)
+                  .sort((a, b) => b.score - a.score);
+
+                for (const r of nullResults) {
+                  totalNodes += r.nodes;
+                  if (!r.completed) {
+                    // Ran out of time at this depth; keep previous best.
+                    break;
+                  }
+                }
+
+                // 3) Full-window re-search any fail-high moves (as time allows).
+                for (const fh of failHigh) {
+                  if (Date.now() >= depthDeadline) break;
+                  const w = activeWorkers[0]!;
+                  const full = await runRootMove(w, fh.move, depth, alpha, CONFIG.INFINITY, depthDeadline);
+                  if (!full || !full.completed) break;
+                  totalNodes += full.nodes;
+                  if (full.score > bestAtDepth) {
+                    bestAtDepth = full.score;
+                    bestMoveAtDepth = fh.move;
+                    alpha = bestAtDepth;
+                  }
+                }
+
+                bestMoveSoFar = bestMoveAtDepth;
+                bestScoreSoFar = bestAtDepth;
+                bestDepthSoFar = depth;
+
+                // Reorder PV to front for next depth.
+                if (moveList[0] !== bestMoveSoFar) {
+                  moveList = [bestMoveSoFar, ...moveList.filter(m => m !== bestMoveSoFar)];
+                }
+
+                if (bestScoreSoFar >= CONFIG.WIN_SCORE - 100) break;
+                if (bestScoreSoFar <= CONFIG.LOSS_SCORE + 100) break;
+              }
+
+              for (const w of activeWorkers) w.terminate();
+
+              // If we never completed even depth 1 (common symptom: worker crash / unsupported Atomics),
+              // do NOT return a "depth=0,nodes=0" pseudo-result. Fall back to root-split Ultra.
+              if (bestDepthSoFar <= 0 || totalNodes <= 0) {
+                usedSharedTT = false;
+                await runUltraRootSplitFallback();
+                didComputeUltraResult = true;
+              } else {
+                result = {
+                  completed: true,
+                  score: bestScoreSoFar,
+                  move: bestMoveSoFar,
+                  depth: bestDepthSoFar,
+                  nodes: totalNodes,
+                };
+                nodes = totalNodes;
+                didComputeUltraResult = true;
+              }
+            }
+          } catch {
+            usedSharedTT = false;
+            await runUltraRootSplitFallback();
+            didComputeUltraResult = true;
+          }
+        }
+      }
+
+      if (!didComputeUltraResult) {
+        await runUltraRootSplitFallback();
+      }
     } else {
-      result = findBestMove(board, player, timeLimit, maxDepth, nnueWeights);
+      if (predictedHit === true && ponderReplySession && ponderPredictedChildHash === board.hash.toString()) {
+        usedReplySession = true;
+        result = ponderReplySession.searchSlice(timeLimit);
+      } else {
+        result = findBestMove(board, player, timeLimit, maxDepth, nnueWeights, rootMoveFilter, ply1ReplyMoveFilter);
+      }
+      nodes = result.nodes ?? 0;
     }
-    const nodes = result.nodes ?? 0;
+
     const ttStats = tt.getProbeStats();
     const reuseFromPrevPct = ttStats.hits > 0 ? ttStats.hitsPrevAge / ttStats.hits : 0;
     
     if (!result.move) {
-      console.warn('[AI Worker] No move found');
+      console.warn('[AI Worker] No move found; attempting generated fallback');
+      const generated = generateAllMoves(board, player);
+      let fallback: Move | null = null;
+      for (const m of generated) {
+        if (isMoveLegal(board, m.move, player) && (rootMoveFilter === null || rootMoveFilter(m.move))) {
+          fallback = m.move;
+          break;
+        }
+      }
+
+      if (!fallback) {
+        console.warn('[AI Worker] No legal fallback exists after empty search result');
+        clearActiveDihedral();
+        return { type: 'result', move: null };
+      }
+
+      result = {
+        completed: true,
+        score: 0,
+        move: fallback,
+        depth: 0,
+        nodes,
+      };
+    }
+
+    const baseMove = result.move;
+    if (!baseMove) {
+      console.warn('[AI Worker] No move found after fallback attempts');
+      clearActiveDihedral();
       return { type: 'result', move: null };
+    }
+
+    // Guard: never emit an illegal move (can happen in rare TT/collision or edge states).
+    let chosenMove: Move = baseMove;
+    if (!isMoveLegal(board, chosenMove, player) || (rootMoveFilter !== null && !rootMoveFilter(chosenMove))) {
+      const generated = generateAllMoves(board, player);
+      let fallback: Move | null = null;
+      for (const m of generated) {
+        if (isMoveLegal(board, m.move, player) && (rootMoveFilter === null || rootMoveFilter(m.move))) {
+          fallback = m.move;
+          break;
+        }
+      }
+
+      if (!fallback) {
+        console.warn('[AI Worker] Search returned illegal move and no legal fallback exists', {
+          illegal: moveToLogObject(chosenMove),
+        });
+        clearActiveDihedral();
+        return { type: 'result', move: null };
+      }
+
+      console.warn('[AI Worker] Search returned illegal move; using fallback', {
+        illegal: moveToLogObject(chosenMove),
+        fallback: moveToLogObject(fallback),
+      });
+      chosenMove = fallback;
     }
     
     // Convert move to legacy format
-    const positions = moveToLegacy(result.move);
+    const positions = untransformPositions(moveToLegacy(chosenMove));
     
     const moveResult: MoveResult = {
       type: 'result',
       move: {
-        action: result.move.action,
+        action: chosenMove.action,
         positions,
         score: result.score,
         depth: result.depth ?? 1,
@@ -483,12 +1183,12 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
               timeMs: ponder.timeMs,
               bestDepth: ponder.bestDepth,
               bestScore: ponder.bestScore,
-              bestMove: ponder.bestMove,
+              bestMove: untransformLogMove(ponder.bestMove),
               replyNodes: ponder.replyNodes,
               replyTimeMs: ponder.replyTimeMs,
               replyBestDepth: ponder.replyBestDepth,
               replyBestScore: ponder.replyBestScore,
-              replyBestMove: ponder.replyBestMove,
+              replyBestMove: untransformLogMove(ponder.replyBestMove),
               predictedMoveKey: ponder.predictedMoveKey,
               predictedHit,
               usedReplySession,
@@ -510,13 +1210,75 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
       console.log('[AI Worker] Move found', moveResult.move);
     }
     
+    // Reset per-move randomization after producing a move.
+    clearActiveDihedral();
+
     // Clear ponder sessions after using them (next turn will start new pondering).
     resetPonderingState();
     return moveResult;
     
   } catch (error) {
+    const err =
+      error instanceof Error
+        ? { message: error.message, stack: error.stack }
+        : { message: String(error) };
     console.error('[AI Worker] Error finding move:', error);
-    return { type: 'result', move: null };
+    // Best-effort fallback: try to emit a legal move rather than forcing the main thread
+    // into its naive recovery path.
+    try {
+      ensureActiveDihedral();
+      const { board, player, openingPreset, moveIndex } = convertState(request.state);
+      const rootMoveFilter = getOpeningRootMoveFilter(openingPreset, moveIndex, player);
+      const generated = generateAllMoves(board, player);
+      let fallback: Move | null = null;
+      for (const m of generated) {
+        if (isMoveLegal(board, m.move, player) && (rootMoveFilter === null || rootMoveFilter(m.move))) {
+          fallback = m.move;
+          break;
+        }
+      }
+      if (fallback) {
+        const positions = untransformPositions(moveToLegacy(fallback));
+        clearActiveDihedral();
+        resetPonderingState();
+        return {
+          type: 'result',
+          move: {
+            action: fallback.action,
+            positions,
+            score: 0,
+            depth: 0,
+            nodes: 0,
+            time: Date.now() - startTime,
+          },
+          error: {
+            ...err,
+            context: {
+              phase: 'exception-fallback',
+              openingPreset,
+              moveIndex,
+              player,
+              ultraThink: request.config?.maxTime === 0,
+            },
+          },
+        };
+      }
+    } catch (fallbackError) {
+      console.error('[AI Worker] Error while generating fallback move:', fallbackError);
+    }
+
+    clearActiveDihedral();
+    return {
+      type: 'result',
+      move: null,
+      error: {
+        ...err,
+        context: {
+          phase: 'exception-no-fallback',
+          ultraThink: request.config?.maxTime === 0,
+        },
+      },
+    };
   }
 }
 

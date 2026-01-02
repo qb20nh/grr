@@ -118,6 +118,7 @@ export {
 // Search
 export {
   findBestMove,
+  alphaBetaWindowed,
   iterativeDeepening,
   createSearchSession,
   getSearchStats,
@@ -140,9 +141,12 @@ export {
 // Transposition table
 export {
   TranspositionTable,
+  createSharedTranspositionTableBacking,
   getTranspositionTable,
   clearTranspositionTable,
 } from './transposition';
+
+export type { SharedTranspositionTableBacking } from './transposition';
 
 // Zobrist hashing
 export {

@@ -3,10 +3,10 @@
  * The core search engine for the AI
  */
 
-import { CONFIG } from './constants';
+import { CONFIG, BOARD_CELLS } from './constants';
 import type { Board, Color, Move, SearchResult, ScoredMove, UndoInfo } from './types';
-import { getOpponent, moveToKey, movesEqual, createReinforceMove, createSingleWinMove } from './utils';
-import { makeMove, unmakeMove, getWinnerAfterMove, validateReinforce, getEmptyPositions } from './board';
+import { getOpponent, moveToKey, movesEqual, createReinforceMove, createSingleWinMove, createRiftMove } from './utils';
+import { makeMove, unmakeMove, getWinnerAfterMove, validateReinforce, validateRift, getEmptyPositions } from './board';
 import { evaluateSearch, isQuietPosition } from './evaluate';
 import { generateAllMoves, generateTacticalMoves } from './moveGen';
 import { orderMoves, updateKillerMoves, updateHistory, updateCounterMove, updateContinuationHistory, clearMoveOrdering, PVTable, isInterestingMove, getLMRReduction, getFutilityMargin } from './moveOrder';
@@ -17,6 +17,15 @@ import { withTurn } from './zobrist';
 import { threatSpaceSearch } from './tss';
 import type { NnueWeights } from './nnue/weights';
 import { NnueState } from './nnue/evaluator';
+import { evaluateReinforceMove } from './synergy';
+
+// Some legality constraints apply only at the ROOT and depend on non-board state
+// (e.g. Long Pro move-index opening rules). Those constraints are enforced via `rootMoveFilter`,
+// but the transposition table key only includes (board + ko + side to move).
+// To prevent TT hits computed under a different root constraint context, salt the ROOT TT key
+// when a root filter is active.
+const ROOT_FILTER_TT_SALT = 0x9e3779b97f4a7c15n;
+const PLY1_FILTER_TT_SALT = 0x243f6a8885a308d3n;
 
 // Search statistics
 let nodesSearched = 0;
@@ -32,6 +41,84 @@ interface SearchContext {
    * NOT short-circuit search; it only influences move ordering at ply 0.
    */
   rootMoveHint: Move | null;
+  /**
+   * Optional root move filter. Applied ONLY at ply 0 to restrict the move set (e.g. opening rules).
+   */
+  rootMoveFilter: ((m: Move) => boolean) | null;
+  /**
+   * Optional salt applied to the TT key at ply 0 only.
+   */
+  rootTTSalt: bigint;
+  /**
+   * Optional move filter applied to ply 1 only (the opponent's immediate reply to root).
+   * Used to model opening-dependent constraints on the opponent's *next* move.
+   */
+  ply1MoveFilter: ((m: Move) => boolean) | null;
+  /**
+   * Optional salt applied to the TT key at ply 1 only (when `ply1MoveFilter` is active).
+   */
+  ply1TTSalt: bigint;
+}
+
+function filterRootMoves(
+  moves: ScoredMove[],
+  filter: ((m: Move) => boolean) | null
+): ScoredMove[] {
+  if (!filter) return moves;
+  return moves.filter(m => filter(m.move));
+}
+
+function generateFallbackRootMoves(
+  board: Board,
+  player: Color,
+  filter: (m: Move) => boolean
+): ScoredMove[] {
+  const empties = getEmptyPositions(board);
+
+  const out: ScoredMove[] = [];
+
+  // 1) Reinforce moves: generate legal pairs from the full empty set so that opening filters
+  // can still find legal options even when the normal candidate generator is too local.
+  for (let i = 0; i < empties.length; i++) {
+    const a = empties[i];
+    for (let j = i + 1; j < empties.length; j++) {
+      const b = empties[j];
+      if (!validateReinforce(board, a, b, player)) continue;
+      const move = createReinforceMove(a, b);
+      if (!filter(move)) continue;
+      const score = evaluateReinforceMove(board, a, b, player);
+      out.push({ move, score, orderScore: score });
+    }
+  }
+
+  // 2) Rift moves: include *all* legal rifts that pass the filter (not just top-K).
+  // This prevents the filter from accidentally eliminating the truncated rift list.
+  for (let pos = 0; pos < BOARD_CELLS; pos++) {
+    if (!validateRift(board, pos, player)) continue;
+    const move = createRiftMove(pos);
+    if (!filter(move)) continue;
+    // Keep neutral score; search will evaluate properly.
+    out.push({ move, score: 0, orderScore: 0 });
+  }
+
+  out.sort((a, b) => {
+    const as = a.orderScore ?? a.score;
+    const bs = b.orderScore ?? b.score;
+    return bs - as;
+  });
+
+  return out;
+}
+
+function getRootMoves(
+  board: Board,
+  player: Color,
+  rootMoveFilter: ((m: Move) => boolean) | null
+): ScoredMove[] {
+  const moves = filterRootMoves(generateAllMoves(board, player), rootMoveFilter);
+  if (moves.length > 0) return moves;
+  if (!rootMoveFilter) return moves;
+  return generateFallbackRootMoves(board, player, rootMoveFilter);
 }
 
 function applyMove(ctx: SearchContext, move: Move, player: Color): UndoInfo {
@@ -176,7 +263,13 @@ function alphaBeta(
   }
   
   // Transposition table probe
-  const ttKey = withTurn(ctx.board.hash, player);
+  const baseKey = withTurn(ctx.board.hash, player);
+  const ttKey =
+    ply === 0 && ctx.rootTTSalt !== 0n
+      ? (baseKey ^ ctx.rootTTSalt)
+      : ply === 1 && ctx.ply1TTSalt !== 0n
+        ? (baseKey ^ ctx.ply1TTSalt)
+        : baseKey;
   const [ttHit, ttScore, ttBestMove] = tt.tryGetScore(ttKey, depth, alpha, beta, ply);
   if (ttHit) {
     return { completed: true, score: ttScore, move: ttBestMove };
@@ -275,6 +368,23 @@ function alphaBeta(
   const orderingHint = ply === 0 && ctx.rootMoveHint ? ctx.rootMoveHint : ttBestMove;
   let moves = orderMoves(ctx.board, player, ply, orderingHint, prevMove);
 
+  // Root-only move filtering (e.g. opening constraints).
+  if (ply === 0 && ctx.rootMoveFilter) {
+    moves = filterRootMoves(moves, ctx.rootMoveFilter);
+    if (moves.length === 0) {
+      moves = generateFallbackRootMoves(ctx.board, player, ctx.rootMoveFilter);
+    }
+  }
+
+  // Ply-1-only move filtering: allow the root to correctly anticipate opening constraints
+  // on the opponent's immediate reply (e.g. Long Pro).
+  if (ply === 1 && ctx.ply1MoveFilter) {
+    moves = filterRootMoves(moves, ctx.ply1MoveFilter);
+    if (moves.length === 0) {
+      moves = generateFallbackRootMoves(ctx.board, player, ctx.ply1MoveFilter);
+    }
+  }
+
   // Progressive widening at root: start with a smaller set of top moves and expand with depth.
   if (ply === 0) {
     const base = underCriticalThreat ? 24 : 12;
@@ -295,6 +405,9 @@ function alphaBeta(
   
   let bestMove: Move | null = null;
   let bestScore = -CONFIG.INFINITY;
+  // Root-only random tie-break among equal best scores.
+  // Keeps inner nodes deterministic for stability/perf.
+  let rootTieCount = 0;
   let flag: 'exact' | 'lower' | 'upper' = 'upper';
   let searchedMoves = 0;
 
@@ -423,6 +536,7 @@ function alphaBeta(
     if (score > bestScore) {
       bestScore = score;
       bestMove = move;
+      if (ply === 0) rootTieCount = 1;
       
       if (score > alpha) {
         alpha = score;
@@ -442,6 +556,13 @@ function alphaBeta(
           break;
         }
       }
+    } else if (ply === 0 && score === bestScore && bestMove !== null) {
+      // Reservoir sampling for unbiased selection among tied best moves.
+      rootTieCount++;
+      if (Math.random() < 1 / rootTieCount) {
+        bestMove = move;
+        pvTable.update(ply, move);
+      }
     }
   }
   
@@ -454,6 +575,52 @@ function alphaBeta(
     completed: !searchAborted,
     score: bestScore,
     move: bestMove,
+  };
+}
+
+/**
+ * Fixed-depth alpha-beta (PVS) with an explicit (alpha, beta) window.
+ * Intended for Ultra's parallel root-PVS worker tasks.
+ *
+ * NOTE: This does NOT do iterative deepening; it runs exactly one depth.
+ */
+export function alphaBetaWindowed(
+  board: Board,
+  player: Color,
+  depth: number,
+  alpha: number,
+  beta: number,
+  timeLimitMs: number,
+  tt: TranspositionTable = getTranspositionTable(),
+  nnueWeights: NnueWeights | null = null,
+  prevMove: Move | null = null,
+  rootMoveFilter: ((m: Move) => boolean) | null = null
+): SearchResult {
+  // Initialize search state for this call.
+  searchStartTime = Date.now();
+  searchTimeLimit = Math.max(1, Math.floor(timeLimitMs));
+  searchAborted = false;
+  nodesSearched = 0;
+
+  const nnue = nnueWeights ? NnueState.fromBoard(board, nnueWeights) : null;
+  const ctx: SearchContext = {
+    board,
+    nnue,
+    rootMoveHint: null,
+    rootMoveFilter,
+    rootTTSalt: rootMoveFilter ? ROOT_FILTER_TT_SALT : 0n,
+    ply1MoveFilter: null,
+    ply1TTSalt: 0n,
+  };
+  const pvTable = new PVTable();
+  const res = alphaBeta(ctx, player, depth, alpha, beta, 0, tt, pvTable, true, prevMove);
+
+  return {
+    completed: res.completed,
+    score: res.score,
+    move: res.move,
+    nodes: nodesSearched,
+    depth,
   };
 }
 
@@ -495,6 +662,15 @@ export function iterativeDeepening(
      * while still allowing alpha-beta to pick a better second stone / line.
      */
     rootMoveHint?: Move | null;
+    /**
+     * Optional root move filter. Applied ONLY at ply 0.
+     */
+    rootMoveFilter?: (m: Move) => boolean;
+    /**
+     * Optional ply-1 move filter. Applied ONLY at ply 1 (opponent reply to root).
+     * Used to model opening constraints on the opponent's immediate reply (Long Pro lookahead).
+     */
+    ply1MoveFilter?: (m: Move) => boolean;
   }
 ): SearchResult {
   // Initialize search state
@@ -521,11 +697,21 @@ export function iterativeDeepening(
   }
 
   const nnue = options?.nnueWeights ? NnueState.fromBoard(board, options.nnueWeights) : null;
-  const ctx: SearchContext = { board, nnue, rootMoveHint: options?.rootMoveHint ?? null };
+  const rootMoveFilter = options?.rootMoveFilter ?? null;
+  const ply1MoveFilter = options?.ply1MoveFilter ?? null;
+  const ctx: SearchContext = {
+    board,
+    nnue,
+    rootMoveHint: options?.rootMoveHint ?? null,
+    rootMoveFilter,
+    rootTTSalt: rootMoveFilter ? ROOT_FILTER_TT_SALT : 0n,
+    ply1MoveFilter,
+    ply1TTSalt: ply1MoveFilter ? PLY1_FILTER_TT_SALT : 0n,
+  };
   
   // CRITICAL: Always have a valid move before starting search
   // This guarantees we never return null
-  const allMoves = generateAllMoves(board, player);
+  const allMoves = getRootMoves(board, player, ctx.rootMoveFilter);
   let bestMoveSoFar: Move | null = allMoves.length > 0 ? allMoves[0].move : null;
   let bestScoreSoFar = allMoves.length > 0 ? allMoves[0].score : 0;
   let bestDepthSoFar = 0;
@@ -538,10 +724,6 @@ export function iterativeDeepening(
     if (match) {
       bestMoveSoFar = match.move;
       bestScoreSoFar = match.score;
-    } else {
-      // Hint might be outside the truncated move generator; still prefer it as a safe fallback.
-      bestMoveSoFar = hinted;
-      // Keep bestScoreSoFar as-is (only affects aspiration at depth>1).
     }
   }
   
@@ -661,6 +843,7 @@ class SearchSessionImpl implements SearchSession {
   private pvTable: PVTable;
   private nnueWeights: NnueWeights | null;
   private nnue: NnueState | null = null;
+  private rootMoveFilter: ((m: Move) => boolean) | null;
 
   private bestMove: Move | null = null;
   private bestScore = 0;
@@ -668,13 +851,21 @@ class SearchSessionImpl implements SearchSession {
   private lastScore = 0;
   private nextDepth = 1;
 
-  constructor(board: Board, player: Color, maxDepth: number, tt: TranspositionTable, nnueWeights: NnueWeights | null) {
+  constructor(
+    board: Board,
+    player: Color,
+    maxDepth: number,
+    tt: TranspositionTable,
+    nnueWeights: NnueWeights | null,
+    rootMoveFilter: ((m: Move) => boolean) | null
+  ) {
     this.board = board;
     this.player = player;
     this.maxDepth = maxDepth;
     this.tt = tt;
     this.pvTable = new PVTable();
     this.nnueWeights = nnueWeights;
+    this.rootMoveFilter = rootMoveFilter;
     this.resetForPosition();
   }
 
@@ -686,7 +877,7 @@ class SearchSessionImpl implements SearchSession {
     this.nnue = this.nnueWeights ? NnueState.fromBoard(this.board, this.nnueWeights) : null;
 
     // Seed "best move so far" to guarantee non-null result.
-    const moves = generateAllMoves(this.board, this.player);
+    const moves = getRootMoves(this.board, this.player, this.rootMoveFilter);
     this.bestMove = moves.length > 0 ? moves[0].move : null;
     this.bestScore = moves.length > 0 ? moves[0].score : 0;
     this.bestDepth = 0;
@@ -734,7 +925,15 @@ class SearchSessionImpl implements SearchSession {
       timeState.canExtend = false;
     }
 
-    const ctx: SearchContext = { board: this.board, nnue: this.nnue, rootMoveHint: null };
+    const ctx: SearchContext = {
+      board: this.board,
+      nnue: this.nnue,
+      rootMoveHint: null,
+      rootMoveFilter: this.rootMoveFilter,
+      rootTTSalt: this.rootMoveFilter ? ROOT_FILTER_TT_SALT : 0n,
+      ply1MoveFilter: null,
+      ply1TTSalt: 0n,
+    };
     const baseWindow = 200000;
 
     for (let depth = this.nextDepth; depth <= this.maxDepth; depth++) {
@@ -807,9 +1006,10 @@ export function createSearchSession(
   player: Color,
   maxDepth: number = CONFIG.MAX_DEPTH,
   tt: TranspositionTable = getTranspositionTable(),
-  nnueWeights: NnueWeights | null = null
+  nnueWeights: NnueWeights | null = null,
+  rootMoveFilter: ((m: Move) => boolean) | null = null
 ): SearchSession {
-  return new SearchSessionImpl(board, player, maxDepth, tt, nnueWeights);
+  return new SearchSessionImpl(board, player, maxDepth, tt, nnueWeights, rootMoveFilter);
 }
 
 /**
@@ -821,13 +1021,15 @@ export function findBestMove(
   player: Color,
   timeLimit: number = CONFIG.DEFAULT_TIME,
   maxDepth: number = CONFIG.MAX_DEPTH,
-  nnueWeights: NnueWeights | null = null
+  nnueWeights: NnueWeights | null = null,
+  rootMoveFilter: ((m: Move) => boolean) | null = null,
+  ply1MoveFilter: ((m: Move) => boolean) | null = null
 ): SearchResult {
   const startMs = Date.now();
   // Quick check for obvious moves
   
   // 1. Check if we can win immediately
-  const moves = generateAllMoves(board, player);
+  const moves = getRootMoves(board, player, rootMoveFilter);
   
   // Safety: if no moves, return null (shouldn't happen in normal play)
   if (moves.length === 0) {
@@ -888,6 +1090,12 @@ export function findBestMove(
   // even under very small time budgets where deep search may not complete.
   function sanitizeRootMove(result: SearchResult): SearchResult {
     if (!result.move) return result;
+    // If an external source (e.g. TSS) produced a move outside the root filter, do NOT return it.
+    // This can happen under small budgets where we might otherwise return immediately.
+    if (rootMoveFilter && !rootMoveFilter(result.move)) {
+      const fallback = moves[0]?.move ?? null;
+      return { ...result, move: fallback };
+    }
 
     const allowsImmediateLoss = (mv: Move): boolean => {
       const undo = makeMove(board, mv, player);
@@ -942,7 +1150,11 @@ export function findBestMove(
     maxAttackerMoves: 16,
     maxDefenderMoves: 24,
   });
-  if (tssAttack.status === 'proven_win' && tssAttack.move) {
+  if (
+    tssAttack.status === 'proven_win' &&
+    tssAttack.move &&
+    (rootMoveFilter === null || rootMoveFilter(tssAttack.move))
+  ) {
     return sanitizeRootMove({
       completed: true,
       score: CONFIG.WIN_SCORE,
@@ -971,15 +1183,17 @@ export function findBestMove(
     if (tssDefense.status === 'not_proven' && tssDefense.move) {
       // Defender found a refutation (within threat-space). Use it only as a root ordering hint,
       // so alpha-beta can still choose a stronger second stone / continuation.
-      rootMoveHint = tssDefense.move;
-      rootMoveHintNodes = tssDefense.nodes;
+      if (rootMoveFilter === null || rootMoveFilter(tssDefense.move)) {
+        rootMoveHint = tssDefense.move;
+        rootMoveHintNodes = tssDefense.nodes;
+      }
 
       // For ultra-tiny budgets, returning the refutation immediately is still valuable.
       if (timeLimit <= 200) {
         return sanitizeRootMove({
           completed: true,
           score: 0,
-          move: tssDefense.move,
+          move: rootMoveHint ?? moves[0].move,
           depth: 0,
           nodes: tssDefense.nodes,
         });
@@ -1002,6 +1216,8 @@ export function findBestMove(
       preserveMoveOrdering: true,
       nnueWeights,
       rootMoveHint,
+      rootMoveFilter: rootMoveFilter ?? undefined,
+      ply1MoveFilter: ply1MoveFilter ?? undefined,
     });
     return sanitizeRootMove(result);
   }
@@ -1018,7 +1234,12 @@ export function findBestMove(
     });
   }
 
-  const result = iterativeDeepening(board, player, remainingMs, maxDepth, { preserveMoveOrdering: true, nnueWeights });
+  const result = iterativeDeepening(board, player, remainingMs, maxDepth, {
+    preserveMoveOrdering: true,
+    nnueWeights,
+    rootMoveFilter: rootMoveFilter ?? undefined,
+    ply1MoveFilter: ply1MoveFilter ?? undefined,
+  });
   return sanitizeRootMove(result);
 }
 

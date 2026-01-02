@@ -148,7 +148,11 @@ export function decodeNnueWeights(buffer: ArrayBuffer): NnueWeights {
 export function getBundledWeightsUrl(): URL {
   const loc = (globalThis as unknown as { location?: Location }).location;
   const origin = loc?.origin ?? 'http://localhost';
-  return new URL('/nnue/weights.bin', origin);
+  // In this repo, production builds may be served under a non-root base path (e.g. `/grr`).
+  // Vite exposes that via `import.meta.env.BASE_URL`.
+  const baseRaw = (import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? '/';
+  const base = baseRaw.endsWith('/') ? baseRaw : `${baseRaw}/`;
+  return new URL(`${base}nnue/weights.bin`, origin);
 }
 
 /**

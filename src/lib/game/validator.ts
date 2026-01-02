@@ -109,9 +109,10 @@ export function checkColinearityConstraint(
 }
 
 /**
- * Checks if placing a single stone at the given position would immediately win.
+ * Checks if placing a single stone at the given position would immediately score
+ * (i.e., create an exact-5 line).
  */
-export function wouldWinWithSingleStone(
+export function wouldScoreWithSingleStone(
   board: Stone[][],
   pos: Position,
   player: PlayerColor
@@ -130,7 +131,7 @@ export function wouldWinWithSingleStone(
 
 /**
  * Validates a complete reinforce action (placing one or two stones).
- * Single stone placement is only allowed if it immediately wins.
+ * Single stone placement is only allowed if it immediately scores.
  */
 export function validateReinforceAction(
   board: Stone[][],
@@ -138,7 +139,7 @@ export function validateReinforceAction(
   currentPlayer: PlayerColor,
   lastRiftedPosition: Position | null
 ): { valid: boolean; reason?: string; isWinningMove?: boolean } {
-  // Single stone placement - only valid if it wins
+  // Single stone placement - only valid if it scores
   if (positions.length === 1) {
     const pos = positions[0];
     
@@ -146,11 +147,11 @@ export function validateReinforceAction(
       return { valid: false, reason: 'Position is invalid' };
     }
     
-    if (wouldWinWithSingleStone(board, pos, currentPlayer)) {
+    if (wouldScoreWithSingleStone(board, pos, currentPlayer)) {
       return { valid: true, isWinningMove: true };
     }
     
-    return { valid: false, reason: 'Single stone placement only allowed when it wins' };
+    return { valid: false, reason: 'Single stone placement only allowed when it scores' };
   }
   
   if (positions.length !== 2) {
@@ -204,6 +205,52 @@ export function validateRiftAction(
   }
 
   return { valid: true };
+}
+
+/**
+ * Returns true if `player` has at least one legal reinforce move available:
+ * - two-stone reinforce (colinearity rules apply), OR
+ * - single-stone reinforce that immediately scores (exact-5).
+ */
+export function hasAnyLegalReinforceMove(
+  board: Stone[][],
+  player: PlayerColor,
+  lastRiftedPosition: Position | null
+): boolean {
+  const empties: Position[] = [];
+
+  for (let row = 0; row < BOARD_SIZE; row++) {
+    for (let col = 0; col < BOARD_SIZE; col++) {
+      const pos = { row, col };
+      if (isValidPlacement(board, pos, lastRiftedPosition)) {
+        empties.push(pos);
+      }
+    }
+  }
+
+  // Single-stone scoring move
+  for (const pos of empties) {
+    const tempBoard = board.map(r => [...r]);
+    tempBoard[pos.row][pos.col] = player;
+    if (checkWinAtPosition(tempBoard, pos, player)) {
+      return true;
+    }
+  }
+
+  if (empties.length < 2) return false;
+
+  // Two-stone reinforce: existence check
+  for (let i = 0; i < empties.length; i++) {
+    const a = empties[i];
+    for (let j = i + 1; j < empties.length; j++) {
+      const b = empties[j];
+      if (checkColinearityConstraint(board, a, b, player)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 /**

@@ -4,7 +4,7 @@
   import { isReplaying, replayBoard, replayHighlights, replayStore } from '$lib/stores/replayStore';
   import { gameEngine } from '$lib/game/engine';
   import { setupCanvas, renderBoard, getCursorStyle } from '$lib/utils/canvas';
-  import type { Position } from '$lib/game/types';
+  import type { Position, PlayerColor } from '$lib/game/types';
   import { BOARD_SIZE } from '$lib/game/types';
 
   const MIN_CELL_SIZE = 22;
@@ -62,10 +62,9 @@
     const isNewGameStart = phase === 'playing' && prevPhase !== 'playing' && state.moveHistory.length === 0;
     prevPhase = phase;
     
-    // Trigger AI if it's a new game and AI should play first
+    // Trigger AI if it's a new game and an AI-controlled side is to move
     if (isNewGameStart && 
-        state.gameMode === 'vs-ai' && 
-        state.currentPlayer === state.aiColor && 
+        (state.gameMode === 'ai-vs-ai' || (state.gameMode === 'vs-ai' && state.currentPlayer === state.aiColor)) && 
         !state.aiThinking) {
       setTimeout(() => gameEngine.executeAiTurn(), 500);
     }
@@ -135,15 +134,22 @@
         lastRiftedPosition: highlights.removed,
         currentPlayer: replayStore.getCurrentMovePlayer() ?? 'black',
         hoverPosition: null,
-        winningLine: null,
+        winningLine: highlights.winningLine,
+        winningLineBy: highlights.winningLineBy,
         invalidPositions: new Set<string>(),
         gameEnded: false
       });
     } else {
       const invalidPositions = gameEngine.getInvalidPositions();
       // Hide hover when AI's turn or AI is thinking
-      const isAisTurn = state.gameMode === 'vs-ai' && state.currentPlayer === state.aiColor;
+      const isAisTurn = state.gameMode === 'ai-vs-ai' || (state.gameMode === 'vs-ai' && state.currentPlayer === state.aiColor);
       const showHover = !state.aiThinking && !isAisTurn;
+
+      let winningLineBy: PlayerColor | null = null;
+      if (state.winningLine && state.moveHistory.length > 0) {
+        const lastMove = state.moveHistory[state.moveHistory.length - 1];
+        winningLineBy = lastMove.scoredBy ?? lastMove.player;
+      }
       
       renderBoard(ctx, {
         cellSize,
@@ -156,6 +162,7 @@
         currentPlayer: state.currentPlayer,
         hoverPosition: showHover ? hoverPosition : null,
         winningLine: state.winningLine,
+        winningLineBy,
         invalidPositions,
         gameEnded: state.phase === 'ended'
       });

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { pendingPlacements, pendingRift, canConfirmMove, aiThinking, isAiTurn, winner, winningLine, gameStore } from '$lib/stores/gameStore';
+  import { pendingPlacements, pendingRift, canConfirmMove, aiThinking, isAiTurn, winner, gameStore } from '$lib/stores/gameStore';
   import { gameEngine } from '$lib/game/engine';
 
   function confirmMove() {
@@ -24,12 +24,11 @@
 
   let winnerName = $derived.by(() => ($winner === 'black' ? 'Black' : $winner === 'white' ? 'White' : ''));
   let loserName = $derived.by(() => ($winner === 'black' ? 'White' : $winner === 'white' ? 'Black' : ''));
-  let isResignation = $derived.by(() => !($winningLine && $winningLine.length > 0));
+  let isResignation = $derived.by(() => $gameStore.endReason === 'resign');
   let turnNumber = $derived.by(() => {
     if (!$winner) return 0;
     const n = $gameStore.moveHistory.length;
-    const isResign = !($winningLine && $winningLine.length > 0);
-    return isResign ? n + 1 : n;
+    return isResignation ? n + 1 : n;
   });
 
   let isVsAi = $derived.by(() => $gameStore.gameMode === 'vs-ai' && $gameStore.aiColor !== null);
@@ -40,17 +39,35 @@
   });
 
   let resultDetail = $derived.by(() => {
-    if (!$winner) return '';
-    const actor = isResignation ? loserName : winnerName;
-    const reason = isResignation ? 'resignation' : '5 in a row';
-    return `${actor} ${reason} at ${ordinal(turnNumber)} turn`;
+    if ($gameStore.endReason === null) return '';
+
+    if ($gameStore.endReason === 'resign') {
+      const actor = loserName;
+      const reason = 'resignation';
+      return `${actor} ${reason} at ${ordinal(turnNumber)} turn`;
+    }
+
+    if ($gameStore.endReason === 'score') {
+      const actor = winnerName;
+      const reason = `reached ${$gameStore.scoreToWin} points`;
+      return `${actor} ${reason} at ${ordinal(turnNumber)} turn`;
+    }
+
+    // exhaustion (unlimited mode)
+    const b = $gameStore.scores.black;
+    const w = $gameStore.scores.white;
+    if ($winner) {
+      return `${winnerName} wins on score ${b}-${w}`;
+    }
+    return `Draw on score ${b}-${w}`;
   });
 
   let resultText = $derived.by(() => {
-    if (!$winner) return '';
+    if ($gameStore.endReason === null) return '';
     const base = resultDetail;
     if (!isVsAi || !humanColor) return base;
-    const outcome = $winner === humanColor ? 'You won!' : 'You lost!';
+    const outcome =
+      $winner === null ? 'Draw.' : $winner === humanColor ? 'You won!' : 'You lost!';
     return `${outcome} ${base}`;
   });
 
@@ -61,6 +78,7 @@
   });
 
   let idleText = $derived.by(() => {
+    if ($gameStore.gameMode === 'ai-vs-ai') return 'Spectating (AI vs AI)';
     if ($aiThinking) return 'AI thinking...';
     if ($isAiTurn) return 'Opponent\'s turn';
     return 'Your turn';
@@ -70,7 +88,7 @@
   let showCancel = $derived(currentMode !== 'idle');
 </script>
 
-{#if $winner}
+{#if $gameStore.endReason !== null}
   <div class="action-panel ended">
     <span class="mode-label result">{resultText}</span>
   </div>

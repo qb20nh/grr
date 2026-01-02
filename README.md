@@ -37,6 +37,15 @@ You can preview the production build with `npm run preview`.
 
 > To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
 
+## Ultra mode (60s) – strongest search prerequisites
+
+The **Ultra** thinking-time option uses a **60s capped** search. For the strongest Ultra (shared transposition table across workers), the runtime needs `SharedArrayBuffer`, which in browsers requires **cross-origin isolation**:
+
+- `Cross-Origin-Opener-Policy: same-origin`
+- `Cross-Origin-Embedder-Policy: require-corp`
+
+This repo sets these headers automatically for `vite dev` and `vite preview` (see `vite.config.ts`). For static hosting, `static/_headers` is included for hosts that support it (e.g. Netlify/Cloudflare Pages). If your host can’t set these headers, Ultra will fall back to the non-shared implementation.
+
 ## Training (self-play → NNUE → Elo-gated promotion)
 
 This repo includes an **offline self-improvement loop** that:
@@ -69,7 +78,9 @@ python training/cycle.py --cycles 1 --games 50
 
 - **Best (canonical)**: `training/best/weights.bin`
 - **App-consumed (bundled when present)**: `static/nnue/weights.bin`
-  - The app/worker will try to load `/nnue/weights.bin`. If missing/corrupt, NNUE is disabled and the AI falls back to handcrafted eval/search.
+  - The app/worker loads `(<base>/nnue/weights.bin)`. If missing/corrupt, NNUE is disabled and the AI falls back to handcrafted eval/search.
+    - Dev: `/nnue/weights.bin`
+    - Prod (this repo’s static base path): `/grr/nnue/weights.bin`
 
 ## Dashboard
 

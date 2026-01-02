@@ -13,7 +13,7 @@
     resignDialog?.close();
     const state = gameStore.getState();
     const winnerColor = state.currentPlayer === 'black' ? 'white' : 'black';
-    gameStore.setWinner(winnerColor);
+    gameStore.endGame(winnerColor, 'resign');
   }
 
   function cancelResign() {
@@ -31,37 +31,53 @@
 </script>
 
 <div class="game-status">
-  {#if $winner}
-    <div class="left">
+  <div class="left">
+    <div class="score-row">
+      <div class="score-pill">
+        <div class="stone small black"></div>
+        <span class="score-num">{$gameStore.scores.black}</span>
+      </div>
+      <span class="score-target">/{$gameStore.scoreToWin === 0 ? '∞' : $gameStore.scoreToWin}</span>
+      <div class="score-pill">
+        <div class="stone small white"></div>
+        <span class="score-num">{$gameStore.scores.white}</span>
+      </div>
+      {#if $isReplaying}
+        <span class="status-text accent">Replay</span>
+      {/if}
+    </div>
+
+    {#if $gameStore.endReason !== null}
       <div class="status-row">
-        <div class="stone" class:black={$winner === 'black'} class:white={$winner === 'white'}></div>
-        {#if $isReplaying}
-          <span class="status-text accent">Replay</span>
+        {#if $winner}
+          <div class="stone" class:black={$winner === 'black'} class:white={$winner === 'white'}></div>
+        {:else}
+          <span class="status-text accent">Draw</span>
         {/if}
       </div>
-    </div>
-    {#if !$isReplaying}
-      <div class="right">
-        <div class="btn-row">
-          <button class="btn-sm primary" onclick={newGame}>New</button>
-          <button class="btn-sm" onclick={reviewGame}>Review</button>
-        </div>
+    {:else}
+      <div class="status-row">
+        <div class="stone" class:black={$currentPlayer === 'black'} class:white={$currentPlayer === 'white'}></div>
+        <span class="status-text">{$currentPlayer === 'black' ? 'Black' : 'White'}</span>
+        {#if $isAiTurn}
+          <span class="badge">AI</span>
+        {/if}
+        {#if $aiThinking}
+          <div class="spinner"></div>
+        {/if}
       </div>
     {/if}
-  {:else}
-    <div class="status-row">
-      <div class="stone" class:black={$currentPlayer === 'black'} class:white={$currentPlayer === 'white'}></div>
-      <span class="status-text">{$currentPlayer === 'black' ? 'Black' : 'White'}</span>
-      {#if $isAiTurn}
-        <span class="badge">AI</span>
-      {/if}
-      {#if $aiThinking}
-        <div class="spinner"></div>
-      {/if}
+  </div>
+
+  {#if $gameStore.endReason !== null && !$isReplaying}
+    <div class="right">
+      <div class="btn-row">
+        <button class="btn-sm primary" onclick={newGame}>New</button>
+        <button class="btn-sm" onclick={reviewGame}>Review</button>
+      </div>
     </div>
-    {#if !$aiThinking && !$isAiTurn}
-      <button class="btn-sm muted" onclick={showResignDialog}>Resign</button>
-    {/if}
+  {:else if $gameStore.endReason === null && !$aiThinking && !$isAiTurn}
+    <button class="btn-sm muted" onclick={showResignDialog}>Resign</button>
   {/if}
 </div>
 
@@ -93,6 +109,37 @@
     gap: 2px;
   }
 
+  .score-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .score-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--grid-line);
+    background: var(--bg-primary);
+  }
+
+  .score-num {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-primary);
+    min-width: 10px;
+    text-align: right;
+  }
+
+  .score-target {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+
   .right {
     display: flex;
     flex-direction: column;
@@ -112,6 +159,11 @@
     height: 24px;
     border-radius: 50%;
     flex-shrink: 0;
+  }
+
+  .stone.small {
+    width: 16px;
+    height: 16px;
   }
 
   .stone.black {

@@ -12,6 +12,11 @@ export interface BoardRenderOptions {
   currentPlayer: PlayerColor;
   hoverPosition: Position | null;
   winningLine: Position[] | null;
+  /**
+   * When `winningLine` represents cleared scoring stones, this indicates which player's stones
+   * were cleared (used to color the inner dashed outline).
+   */
+  winningLineBy?: PlayerColor | null;
   invalidPositions: Set<string>;
   gameEnded: boolean;
 }
@@ -36,7 +41,7 @@ const COLORS = {
   pending: 'rgba(0, 217, 255, 0.5)',
   lastMove: 'rgba(0, 217, 255, 0.8)',
   koBlocked: 'rgba(255, 71, 87, 0.4)',
-  winningLine: 'rgba(46, 213, 115, 0.6)',
+  winningLine: '#2ed573',
   invalid: 'rgba(255, 71, 87, 0.15)',
   invalidMark: 'rgba(255, 71, 87, 0.4)',
 };
@@ -65,7 +70,7 @@ export function setupCanvas(canvas: HTMLCanvasElement, cellSize: number, padding
 
 export function renderBoard(ctx: CanvasRenderingContext2D, options: BoardRenderOptions): void {
   const { cellSize, padding, board, pendingPlacements, pendingRift, lastPlacedPositions, 
-          lastRiftedPosition, currentPlayer, hoverPosition, winningLine, 
+          lastRiftedPosition, currentPlayer, hoverPosition, winningLine, winningLineBy,
           invalidPositions, gameEnded } = options;
   const totalSize = cellSize * (BOARD_SIZE - 1) + padding * 2;
   const opponent = currentPlayer === 'black' ? 'white' : 'black';
@@ -112,8 +117,8 @@ export function renderBoard(ctx: CanvasRenderingContext2D, options: BoardRenderO
     ctx.fill();
   }
 
-  // Draw invalid positions (colinearity violations) when we have one pending placement
-  if (!gameEnded && pendingPlacements.length === 1) {
+  // Draw invalid positions (opening constraints, colinearity violations, etc.)
+  if (!gameEnded && invalidPositions.size > 0) {
     for (const key of invalidPositions) {
       const [row, col] = key.split(',').map(Number);
       if (board[row][col] === null) {
@@ -148,18 +153,6 @@ export function renderBoard(ctx: CanvasRenderingContext2D, options: BoardRenderO
     ctx.stroke();
   }
 
-  // Draw winning line highlight
-  if (winningLine) {
-    for (const pos of winningLine) {
-      const x = padding + pos.col * cellSize;
-      const y = padding + pos.row * cellSize;
-      ctx.fillStyle = COLORS.winningLine;
-      ctx.beginPath();
-      ctx.arc(x, y, cellSize * 0.48, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
   // Draw stones
   for (let row = 0; row < BOARD_SIZE; row++) {
     for (let col = 0; col < BOARD_SIZE; col++) {
@@ -168,6 +161,52 @@ export function renderBoard(ctx: CanvasRenderingContext2D, options: BoardRenderO
         drawStone(ctx, padding + col * cellSize, padding + row * cellSize, stone, cellSize);
       }
     }
+  }
+
+  // Draw invalid targets on occupied intersections (e.g. forbidden rift targets in Long Pro)
+  if (!gameEnded && invalidPositions.size > 0) {
+    ctx.save();
+    ctx.strokeStyle = COLORS.dangerDim;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([]);
+
+    for (const key of invalidPositions) {
+      const [row, col] = key.split(',').map(Number);
+      const cell = board[row]?.[col] ?? null;
+      if (cell === null || cell === currentPlayer) continue;
+      const x = padding + col * cellSize;
+      const y = padding + row * cellSize;
+      ctx.beginPath();
+      ctx.arc(x, y, cellSize * 0.46, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  // Draw cleared 5-in-a-row highlight:
+  // - fill: semi-transparent ghost stone in the cleared stones' color
+  // - outline: solid green ring
+  if (winningLine && winningLine.length > 0) {
+    const scoredBy = winningLineBy ?? currentPlayer;
+
+    ctx.save();
+    for (const pos of winningLine) {
+      const x = padding + pos.col * cellSize;
+      const y = padding + pos.row * cellSize;
+
+      // Ghost stone (cleared stone color)
+      drawStone(ctx, x, y, scoredBy, cellSize, 0.5);
+
+      // Outer solid green ring
+      ctx.strokeStyle = COLORS.winningLine;
+      ctx.lineWidth = 3;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.arc(x, y, cellSize * 0.48, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   // Draw last placed position indicators
@@ -238,7 +277,7 @@ export function renderBoard(ctx: CanvasRenderingContext2D, options: BoardRenderO
     const x = padding + hoverPosition.col * cellSize;
     const y = padding + hoverPosition.row * cellSize;
 
-    if (hoverStone === opponent && !isPendingRift) {
+    if (hoverStone === opponent && !isPendingRift && !isInvalid) {
       // Hovering over opponent stone - show rift preview
       ctx.strokeStyle = COLORS.dangerDim;
       ctx.lineWidth = 2;
@@ -257,7 +296,10 @@ export function renderBoard(ctx: CanvasRenderingContext2D, options: BoardRenderO
       ctx.beginPath();
       ctx.arc(x, y, cellSize * 0.42, 0, Math.PI * 2);
       ctx.stroke();
-    } else if ((isKoBlocked || isInvalid) && hoverStone === null) {
+    } else if (
+      (isKoBlocked && hoverStone === null) ||
+      (isInvalid && (hoverStone === null || hoverStone === opponent))
+    ) {
       // Hovering over invalid position - show blocked indicator
       ctx.fillStyle = COLORS.invalidMark;
       ctx.beginPath();
@@ -361,7 +403,7 @@ export function getCursorStyle(
   const isInvalid = invalidPositions.has(`${hoverPosition.row},${hoverPosition.col}`);
 
   if (stone === opponent) {
-    return 'pointer'; // Can rift
+    return isInvalid ? 'not-allowed' : 'pointer'; // Can rift (unless opening-forbidden)
   } else if (stone === currentPlayer) {
     return 'not-allowed'; // Own stone
   } else if (isKoBlocked || isInvalid) {

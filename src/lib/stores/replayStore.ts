@@ -3,14 +3,16 @@
  */
 
 import { writable, derived, get } from 'svelte/store';
-import type { MoveRecord, Stone, Position, PlayerColor } from '$lib/game/types';
-import { createEmptyBoard, BOARD_SIZE } from '$lib/game/types';
+import type { MoveRecord, Stone, Position, PlayerColor, OpeningPreset } from '$lib/game/types';
+import { createInitialBoard, BOARD_SIZE } from '$lib/game/types';
+import { flattenUniquePositions } from '$lib/game/scoredLines';
 import { gameStore } from './gameStore';
 
 interface ReplayState {
   active: boolean;
   moveHistory: MoveRecord[];
   currentIndex: number; // 0 = start (empty board), n = after move n
+  openingPreset: OpeningPreset;
   autoPlayInterval: ReturnType<typeof setInterval> | null;
 }
 
@@ -19,6 +21,7 @@ function createReplayStore() {
     active: false,
     moveHistory: [],
     currentIndex: 0,
+    openingPreset: 'long-pro',
     autoPlayInterval: null
   });
 
@@ -39,6 +42,7 @@ function createReplayStore() {
         active: false,
         moveHistory: [],
         currentIndex: 0,
+        openingPreset: 'long-pro',
         autoPlayInterval: null
       };
     });
@@ -47,8 +51,8 @@ function createReplayStore() {
   /**
    * Reconstruct board state by applying moves up to the given index
    */
-  function reconstructBoard(moves: MoveRecord[], upToIndex: number): Stone[][] {
-    const board = createEmptyBoard();
+  function reconstructBoard(moves: MoveRecord[], upToIndex: number, openingPreset: OpeningPreset): Stone[][] {
+    const board = createInitialBoard(openingPreset);
     
     for (let i = 0; i < upToIndex && i < moves.length; i++) {
       const move = moves[i];
@@ -59,6 +63,15 @@ function createReplayStore() {
         }
       } else if (move.action === 'rift' && move.removedStone) {
         board[move.removedStone.row][move.removedStone.col] = null;
+      }
+
+      if (move.scoredLines) {
+        for (const line of move.scoredLines) {
+          for (const pos of line) {
+            if (pos.row < 0 || pos.row >= BOARD_SIZE || pos.col < 0 || pos.col >= BOARD_SIZE) continue;
+            board[pos.row][pos.col] = null;
+          }
+        }
       }
     }
     
@@ -71,17 +84,26 @@ function createReplayStore() {
   function getMoveHighlights(moves: MoveRecord[], index: number): {
     placed: Position[];
     removed: Position | null;
+    winningLine: Position[] | null;
+    winningLineBy: PlayerColor | null;
   } {
     if (index <= 0 || index > moves.length) {
-      return { placed: [], removed: null };
+      return { placed: [], removed: null, winningLine: null, winningLineBy: null };
     }
     
     const move = moves[index - 1];
+
+    let winningLine: Position[] | null = null;
+    let winningLineBy: PlayerColor | null = null;
+    if (move.scoredLines && move.scoredLines.length > 0) {
+      winningLine = flattenUniquePositions(move.scoredLines);
+      winningLineBy = move.scoredBy ?? move.player;
+    }
     
     if (move.action === 'reinforce') {
-      return { placed: move.positions, removed: null };
+      return { placed: move.positions, removed: null, winningLine, winningLineBy };
     } else {
-      return { placed: [], removed: move.removedStone ?? null };
+      return { placed: [], removed: move.removedStone ?? null, winningLine, winningLineBy };
     }
   }
 
@@ -104,6 +126,7 @@ function createReplayStore() {
           active: true,
           moveHistory: [...gameState.moveHistory],
           currentIndex: 0, // Start at beginning
+          openingPreset: gameState.openingPreset,
           autoPlayInterval: null
         };
       });
@@ -124,6 +147,7 @@ function createReplayStore() {
           active: false,
           moveHistory: [],
           currentIndex: 0,
+          openingPreset: 'long-pro',
           autoPlayInterval: null
         };
       });
@@ -214,13 +238,13 @@ function createReplayStore() {
      */
     getBoard(): Stone[][] {
       const state = get({ subscribe });
-      return reconstructBoard(state.moveHistory, state.currentIndex);
+      return reconstructBoard(state.moveHistory, state.currentIndex, state.openingPreset);
     },
 
     /**
      * Get highlight info for current move
      */
-    getHighlights(): { placed: Position[]; removed: Position | null } {
+    getHighlights(): { placed: Position[]; removed: Position | null; winningLine: Position[] | null; winningLineBy: PlayerColor | null } {
       const state = get({ subscribe });
       return getMoveHighlights(state.moveHistory, state.currentIndex);
     },
@@ -250,7 +274,7 @@ export const isAutoPlaying = derived(replayStore, $state => $state.autoPlayInter
 export const replayBoard = derived(replayStore, $state => {
   if (!$state.active) return null;
   
-  const board = createEmptyBoard();
+  const board = createInitialBoard($state.openingPreset);
   
   for (let i = 0; i < $state.currentIndex && i < $state.moveHistory.length; i++) {
     const move = $state.moveHistory[i];
@@ -261,6 +285,15 @@ export const replayBoard = derived(replayStore, $state => {
       }
     } else if (move.action === 'rift' && move.removedStone) {
       board[move.removedStone.row][move.removedStone.col] = null;
+    }
+
+    if (move.scoredLines) {
+      for (const line of move.scoredLines) {
+        for (const pos of line) {
+          if (pos.row < 0 || pos.row >= BOARD_SIZE || pos.col < 0 || pos.col >= BOARD_SIZE) continue;
+          board[pos.row][pos.col] = null;
+        }
+      }
     }
   }
   
