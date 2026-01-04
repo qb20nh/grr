@@ -9,9 +9,9 @@
   function handleLast() { replayStore.last(); }
   function handleAutoPlay() { replayStore.toggleAutoPlay(800); }
 
-  function handleDownload() {
+  async function handleDownload() {
     const state = gameStore.getState();
-    downloadSaveFile(state);
+    await downloadSaveFile(state);
   }
 
   function handleExit() {

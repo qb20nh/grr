@@ -1,7 +1,10 @@
 import type { GameState, Position } from './types';
 import { CENTER_POS, positionsEqual } from './types';
 
-export const LONG_PRO_MIN_CHEBYSHEV_FROM_CENTER = 4;
+// Long Pro (turn three / Black's second move): the forbidden center region is a diamond
+// (Manhattan distance <= 2 from center).
+export const LONG_PRO_FORBIDDEN_MANHATTAN_RADIUS = 2;
+export const LONG_PRO_MIN_MANHATTAN_FROM_CENTER = LONG_PRO_FORBIDDEN_MANHATTAN_RADIUS + 1;
 
 export type OpeningRelevantState = Pick<GameState, 'openingPreset' | 'currentPlayer' | 'moveHistory'>;
 
@@ -11,7 +14,7 @@ export function isOutsideLongProCenterRegion(
 ): boolean {
   const dr = Math.abs(pos.row - center.row);
   const dc = Math.abs(pos.col - center.col);
-  return Math.max(dr, dc) >= LONG_PRO_MIN_CHEBYSHEV_FROM_CENTER;
+  return dr + dc >= LONG_PRO_MIN_MANHATTAN_FROM_CENTER;
 }
 
 export function isLongProForcedCenterMove(state: OpeningRelevantState): boolean {
@@ -58,7 +61,7 @@ export function validateReinforceOpeningConstraint(
       if (!isOutsideLongProCenterRegion(pos, CENTER_POS)) {
         return {
           ok: false,
-          reason: 'Long Pro: Black stones must be at least 4 intersections away from the center.',
+          reason: 'Long Pro: Black stones must be outside the center diamond (distance 2).',
         };
       }
     }

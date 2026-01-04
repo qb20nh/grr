@@ -3,12 +3,33 @@ import { CENTER_POS, positionsEqual, getOpponent } from './types';
 import { gameStore } from '$lib/stores/gameStore';
 import { validateReinforceAction, validateRiftAction, isValidPlacement, checkColinearityConstraint, wouldScoreWithSingleStone, hasAnyLegalReinforceMove } from './validator';
 import { getScoringLinesAfterRift, getScoringLinesForPlacements } from './winChecker';
+import { LONG_PRO_RIFT_FORBIDDEN_FIRST_TURNS, isRiftAllowedForState } from './riftRules';
 import {
   isLongProForcedCenterMove,
   isLongProRestrictedBlackSecondMove,
   isOutsideLongProCenterRegion,
   validateReinforceOpeningConstraint,
 } from './openingRules';
+import { computeInvalidPositions } from './invalidPositions';
+
+// Fast mode reduces/disables animation delays for automated testing
+let fastModeEnabled = false;
+
+export function setFastMode(enabled: boolean): void {
+  fastModeEnabled = enabled;
+}
+
+export function isFastMode(): boolean {
+  return fastModeEnabled;
+}
+
+function getAnimationDelay(): number {
+  return fastModeEnabled ? 0 : 500;
+}
+
+function getTurnDelay(): number {
+  return fastModeEnabled ? 0 : 300;
+}
 
 export interface GameEngine {
   handleBoardClick(pos: Position): void;
@@ -57,15 +78,22 @@ export function createGameEngine(): GameEngine {
     state: GameState,
     pos: Position
   ): { valid: boolean; reason?: string } {
+    if (!isRiftAllowedForState(state)) {
+      return {
+        valid: false,
+        reason: `Long Pro: Rift is not allowed on turns 1-${LONG_PRO_RIFT_FORBIDDEN_FIRST_TURNS}.`,
+      };
+    }
+
     const base = validateRiftAction(state.board, pos, state.currentPlayer);
     if (!base.valid) return base;
 
     // Long Pro: on Black’s second move (third ply overall), rift targets inside the forbidden
-    // center region are not allowed.
+    // center diamond region are not allowed.
     if (isLongProRestrictedBlackSecondMove(state) && !isOutsideLongProCenterRegion(pos, CENTER_POS)) {
       return {
         valid: false,
-        reason: 'Long Pro: Black cannot rift inside the forbidden center region on this move.',
+        reason: 'Long Pro: Black cannot rift inside the forbidden center diamond on this move.',
       };
     }
 
@@ -276,7 +304,7 @@ export function createGameEngine(): GameEngine {
       }
     }
 
-    // Single-stone reinforce is only allowed when it scores, except Long Pro forced center move.
+    // Single-stone reinforce is only allowed when it scores.
     if (positions.length === 1 && scoredLines.length === 0) {
       if (!validation.allowNonScoringSingle) {
         console.warn('Single stone placement without score - this should not happen');
@@ -292,9 +320,9 @@ export function createGameEngine(): GameEngine {
       return;
     }
     if (updatedState.gameMode === 'vs-ai' && updatedState.currentPlayer === updatedState.aiColor) {
-      setTimeout(() => executeAiTurn(), 300);
+      setTimeout(() => executeAiTurn(), getTurnDelay());
     } else if (updatedState.gameMode === 'ai-vs-ai') {
-      setTimeout(() => executeAiTurn(), 300);
+      setTimeout(() => executeAiTurn(), getTurnDelay());
     }
   }
 
@@ -335,9 +363,9 @@ export function createGameEngine(): GameEngine {
       return;
     }
     if (updatedState.gameMode === 'vs-ai' && updatedState.currentPlayer === updatedState.aiColor) {
-      setTimeout(() => executeAiTurn(), 300);
+      setTimeout(() => executeAiTurn(), getTurnDelay());
     } else if (updatedState.gameMode === 'ai-vs-ai') {
-      setTimeout(() => executeAiTurn(), 300);
+      setTimeout(() => executeAiTurn(), getTurnDelay());
     }
   }
 
@@ -356,7 +384,7 @@ export function createGameEngine(): GameEngine {
       return false;
     }
 
-    // Long Pro: forced first move is center-only.
+    // Long Pro: forced first move is center-only (single stone).
     if (isLongProForcedCenterMove(state) && !positionsEqual(pos, CENTER_POS)) {
       return false;
     }
@@ -388,65 +416,16 @@ export function createGameEngine(): GameEngine {
 
   function getInvalidPositions(): Set<string> {
     const state = getState();
-    const invalid = new Set<string>();
-    
     if (state.phase !== 'playing' || state.winner) {
-      return invalid;
+      return new Set<string>();
     }
-
-    // ---- Long Pro opening constraints ----
-    if (isLongProForcedCenterMove(state)) {
-      for (let row = 0; row < 15; row++) {
-        for (let col = 0; col < 15; col++) {
-          if (state.board[row][col] !== null) continue;
-          const pos = { row, col };
-          if (!positionsEqual(pos, CENTER_POS)) {
-            invalid.add(`${row},${col}`);
-          }
-        }
-      }
-    } else if (isLongProRestrictedBlackSecondMove(state)) {
-      const opponent = getOpponent(state.currentPlayer);
-      for (let row = 0; row < 15; row++) {
-        for (let col = 0; col < 15; col++) {
-          const pos = { row, col };
-          const cell = state.board[row][col];
-          // Mark the forbidden center region for BOTH:
-          // - empty intersections (illegal reinforce placements), and
-          // - opponent stones (illegal rift targets) on Black's restricted 3rd turn.
-          if (cell !== null && cell !== opponent) continue;
-          if (!isOutsideLongProCenterRegion(pos, CENTER_POS)) {
-            invalid.add(`${row},${col}`);
-          }
-        }
-      }
-    }
-
-    // When we have one pending placement, mark colinearity-invalid positions
-    if (state.pendingPlacements.length === 1) {
-      const firstPos = state.pendingPlacements[0];
-      for (let row = 0; row < 15; row++) {
-        for (let col = 0; col < 15; col++) {
-          const pos = { row, col };
-          if (state.board[row][col] === null && 
-              !positionsEqual(pos, state.lastRiftedPosition) &&
-              !positionsEqual(pos, firstPos)) {
-            if (!checkColinearityConstraint(state.board, firstPos, pos, state.currentPlayer)) {
-              invalid.add(`${row},${col}`);
-            }
-          }
-        }
-      }
-    }
-
-    return invalid;
+    return computeInvalidPositions(state);
   }
 
   // NOTE: In ai-vs-ai spectate we must NOT share a single worker across both sides.
   // A shared worker shares TT/move-ordering state between players, which changes behavior vs `vs-ai`.
   // Keep one worker per color so each AI behaves like "AI playing vs human".
   let aiWorkers: { black: Worker | null; white: Worker | null } = { black: null, white: null };
-  const AI_STONE_DELAY = 500; // ms between first and second stone placement
 
   function terminateAi(): void {
     if (aiWorkers.black) aiWorkers.black.terminate();
@@ -501,9 +480,9 @@ export function createGameEngine(): GameEngine {
         return;
       }
       if (afterSwitch.phase === 'playing' && afterSwitch.gameMode === 'ai-vs-ai' && !afterSwitch.winner) {
-        setTimeout(() => executeAiTurn(), 300);
+        setTimeout(() => executeAiTurn(), getTurnDelay());
       }
-    }, AI_STONE_DELAY);
+    }, getAnimationDelay());
   }
 
   function getAiWorker(color: PlayerColor): Worker {
@@ -527,17 +506,22 @@ export function createGameEngine(): GameEngine {
           console.error('[AI] Worker reported error context', workerError);
         }
         const findFallbackReinforce = (state: GameState): Position[] | null => {
+          const openingRequiresTwo = isLongProRestrictedBlackSecondMove(state);
+
+          // Long Pro: forced opening move (Black must play center single stone).
           if (isLongProForcedCenterMove(state)) {
             const v = validateReinforceConsideringOpening(state, [CENTER_POS]);
             return v.valid ? [CENTER_POS] : null;
           }
 
           // Prefer single-stone scoring moves (legal only when it scores).
-          for (let row = 0; row < 15; row++) {
-            for (let col = 0; col < 15; col++) {
-              const pos = { row, col };
-              const v = validateReinforceConsideringOpening(state, [pos]);
-              if (v.valid) return [pos];
+          if (!openingRequiresTwo) {
+            for (let row = 0; row < 15; row++) {
+              for (let col = 0; col < 15; col++) {
+                const pos = { row, col };
+                const v = validateReinforceConsideringOpening(state, [pos]);
+                if (v.valid) return [pos];
+              }
             }
           }
 
@@ -546,6 +530,7 @@ export function createGameEngine(): GameEngine {
             for (let col = 0; col < 15; col++) {
               const pos = { row, col };
               if (isValidPlacement(state.board, pos, state.lastRiftedPosition)) {
+                // Long Pro: forced opening move is handled above.
                 if (isLongProRestrictedBlackSecondMove(state) && !isOutsideLongProCenterRegion(pos, CENTER_POS)) {
                   continue;
                 }
@@ -733,7 +718,7 @@ export function createGameEngine(): GameEngine {
           // Animate two-stone placement: show first stone, wait 500ms, then show second
           animateAiReinforce(move.positions);
         } else if (move.action === 'reinforce') {
-          // Single stone (Long Pro opening move or winning move)
+          // Single stone (winning move)
           gameStore.setAiThinking(false);
           executeReinforce(move.positions);
         } else {

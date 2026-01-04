@@ -26,6 +26,7 @@ import { evaluateReinforceMove } from './synergy';
 // when a root filter is active.
 const ROOT_FILTER_TT_SALT = 0x9e3779b97f4a7c15n;
 const PLY1_FILTER_TT_SALT = 0x243f6a8885a308d3n;
+const PLY2_FILTER_TT_SALT = 0xb7e151628aed2a6bn;
 
 // Search statistics
 let nodesSearched = 0;
@@ -58,6 +59,15 @@ interface SearchContext {
    * Optional salt applied to the TT key at ply 1 only (when `ply1MoveFilter` is active).
    */
   ply1TTSalt: bigint;
+  /**
+   * Optional move filter applied to ply 2 only.
+   * Used for early-turn constraints that span beyond ply 1 (e.g. "no rift for first 3 turns").
+   */
+  ply2MoveFilter: ((m: Move) => boolean) | null;
+  /**
+   * Optional salt applied to the TT key at ply 2 only (when `ply2MoveFilter` is active).
+   */
+  ply2TTSalt: bigint;
 }
 
 function filterRootMoves(
@@ -269,6 +279,8 @@ function alphaBeta(
       ? (baseKey ^ ctx.rootTTSalt)
       : ply === 1 && ctx.ply1TTSalt !== 0n
         ? (baseKey ^ ctx.ply1TTSalt)
+        : ply === 2 && ctx.ply2TTSalt !== 0n
+          ? (baseKey ^ ctx.ply2TTSalt)
         : baseKey;
   const [ttHit, ttScore, ttBestMove] = tt.tryGetScore(ttKey, depth, alpha, beta, ply);
   if (ttHit) {
@@ -382,6 +394,14 @@ function alphaBeta(
     moves = filterRootMoves(moves, ctx.ply1MoveFilter);
     if (moves.length === 0) {
       moves = generateFallbackRootMoves(ctx.board, player, ctx.ply1MoveFilter);
+    }
+  }
+
+  // Ply-2-only move filtering: used for early-turn constraints that need one more ply of lookahead.
+  if (ply === 2 && ctx.ply2MoveFilter) {
+    moves = filterRootMoves(moves, ctx.ply2MoveFilter);
+    if (moves.length === 0) {
+      moves = generateFallbackRootMoves(ctx.board, player, ctx.ply2MoveFilter);
     }
   }
 
@@ -594,7 +614,9 @@ export function alphaBetaWindowed(
   tt: TranspositionTable = getTranspositionTable(),
   nnueWeights: NnueWeights | null = null,
   prevMove: Move | null = null,
-  rootMoveFilter: ((m: Move) => boolean) | null = null
+  rootMoveFilter: ((m: Move) => boolean) | null = null,
+  ply1MoveFilter: ((m: Move) => boolean) | null = null,
+  ply2MoveFilter: ((m: Move) => boolean) | null = null
 ): SearchResult {
   // Initialize search state for this call.
   searchStartTime = Date.now();
@@ -609,8 +631,10 @@ export function alphaBetaWindowed(
     rootMoveHint: null,
     rootMoveFilter,
     rootTTSalt: rootMoveFilter ? ROOT_FILTER_TT_SALT : 0n,
-    ply1MoveFilter: null,
-    ply1TTSalt: 0n,
+    ply1MoveFilter,
+    ply1TTSalt: ply1MoveFilter ? PLY1_FILTER_TT_SALT : 0n,
+    ply2MoveFilter,
+    ply2TTSalt: ply2MoveFilter ? PLY2_FILTER_TT_SALT : 0n,
   };
   const pvTable = new PVTable();
   const res = alphaBeta(ctx, player, depth, alpha, beta, 0, tt, pvTable, true, prevMove);
@@ -671,6 +695,10 @@ export function iterativeDeepening(
      * Used to model opening constraints on the opponent's immediate reply (Long Pro lookahead).
      */
     ply1MoveFilter?: (m: Move) => boolean;
+    /**
+     * Optional ply-2 move filter. Applied ONLY at ply 2.
+     */
+    ply2MoveFilter?: (m: Move) => boolean;
   }
 ): SearchResult {
   // Initialize search state
@@ -699,6 +727,7 @@ export function iterativeDeepening(
   const nnue = options?.nnueWeights ? NnueState.fromBoard(board, options.nnueWeights) : null;
   const rootMoveFilter = options?.rootMoveFilter ?? null;
   const ply1MoveFilter = options?.ply1MoveFilter ?? null;
+  const ply2MoveFilter = options?.ply2MoveFilter ?? null;
   const ctx: SearchContext = {
     board,
     nnue,
@@ -707,6 +736,8 @@ export function iterativeDeepening(
     rootTTSalt: rootMoveFilter ? ROOT_FILTER_TT_SALT : 0n,
     ply1MoveFilter,
     ply1TTSalt: ply1MoveFilter ? PLY1_FILTER_TT_SALT : 0n,
+    ply2MoveFilter,
+    ply2TTSalt: ply2MoveFilter ? PLY2_FILTER_TT_SALT : 0n,
   };
   
   // CRITICAL: Always have a valid move before starting search
@@ -828,7 +859,13 @@ export interface SearchSession {
   /**
    * Replace the position and reset deepening state (TT/history are preserved).
    */
-  setPosition(board: Board, player: Color): void;
+  setPosition(
+    board: Board,
+    player: Color,
+    rootMoveFilter?: ((m: Move) => boolean) | null,
+    ply1MoveFilter?: ((m: Move) => boolean) | null,
+    ply2MoveFilter?: ((m: Move) => boolean) | null
+  ): void;
   /**
    * Get the best result found so far without searching.
    */
@@ -844,6 +881,8 @@ class SearchSessionImpl implements SearchSession {
   private nnueWeights: NnueWeights | null;
   private nnue: NnueState | null = null;
   private rootMoveFilter: ((m: Move) => boolean) | null;
+  private ply1MoveFilter: ((m: Move) => boolean) | null;
+  private ply2MoveFilter: ((m: Move) => boolean) | null;
 
   private bestMove: Move | null = null;
   private bestScore = 0;
@@ -857,7 +896,9 @@ class SearchSessionImpl implements SearchSession {
     maxDepth: number,
     tt: TranspositionTable,
     nnueWeights: NnueWeights | null,
-    rootMoveFilter: ((m: Move) => boolean) | null
+    rootMoveFilter: ((m: Move) => boolean) | null,
+    ply1MoveFilter: ((m: Move) => boolean) | null,
+    ply2MoveFilter: ((m: Move) => boolean) | null
   ) {
     this.board = board;
     this.player = player;
@@ -866,6 +907,8 @@ class SearchSessionImpl implements SearchSession {
     this.pvTable = new PVTable();
     this.nnueWeights = nnueWeights;
     this.rootMoveFilter = rootMoveFilter;
+    this.ply1MoveFilter = ply1MoveFilter;
+    this.ply2MoveFilter = ply2MoveFilter;
     this.resetForPosition();
   }
 
@@ -885,9 +928,18 @@ class SearchSessionImpl implements SearchSession {
     this.nextDepth = 1;
   }
 
-  setPosition(board: Board, player: Color): void {
+  setPosition(
+    board: Board,
+    player: Color,
+    rootMoveFilter?: ((m: Move) => boolean) | null,
+    ply1MoveFilter?: ((m: Move) => boolean) | null,
+    ply2MoveFilter?: ((m: Move) => boolean) | null
+  ): void {
     this.board = board;
     this.player = player;
+    if (rootMoveFilter !== undefined) this.rootMoveFilter = rootMoveFilter;
+    if (ply1MoveFilter !== undefined) this.ply1MoveFilter = ply1MoveFilter;
+    if (ply2MoveFilter !== undefined) this.ply2MoveFilter = ply2MoveFilter;
     this.resetForPosition();
   }
 
@@ -931,8 +983,10 @@ class SearchSessionImpl implements SearchSession {
       rootMoveHint: null,
       rootMoveFilter: this.rootMoveFilter,
       rootTTSalt: this.rootMoveFilter ? ROOT_FILTER_TT_SALT : 0n,
-      ply1MoveFilter: null,
-      ply1TTSalt: 0n,
+      ply1MoveFilter: this.ply1MoveFilter,
+      ply1TTSalt: this.ply1MoveFilter ? PLY1_FILTER_TT_SALT : 0n,
+      ply2MoveFilter: this.ply2MoveFilter,
+      ply2TTSalt: this.ply2MoveFilter ? PLY2_FILTER_TT_SALT : 0n,
     };
     const baseWindow = 200000;
 
@@ -1007,9 +1061,11 @@ export function createSearchSession(
   maxDepth: number = CONFIG.MAX_DEPTH,
   tt: TranspositionTable = getTranspositionTable(),
   nnueWeights: NnueWeights | null = null,
-  rootMoveFilter: ((m: Move) => boolean) | null = null
+  rootMoveFilter: ((m: Move) => boolean) | null = null,
+  ply1MoveFilter: ((m: Move) => boolean) | null = null,
+  ply2MoveFilter: ((m: Move) => boolean) | null = null
 ): SearchSession {
-  return new SearchSessionImpl(board, player, maxDepth, tt, nnueWeights, rootMoveFilter);
+  return new SearchSessionImpl(board, player, maxDepth, tt, nnueWeights, rootMoveFilter, ply1MoveFilter, ply2MoveFilter);
 }
 
 /**
@@ -1023,7 +1079,8 @@ export function findBestMove(
   maxDepth: number = CONFIG.MAX_DEPTH,
   nnueWeights: NnueWeights | null = null,
   rootMoveFilter: ((m: Move) => boolean) | null = null,
-  ply1MoveFilter: ((m: Move) => boolean) | null = null
+  ply1MoveFilter: ((m: Move) => boolean) | null = null,
+  ply2MoveFilter: ((m: Move) => boolean) | null = null
 ): SearchResult {
   const startMs = Date.now();
   // Quick check for obvious moves
@@ -1218,6 +1275,7 @@ export function findBestMove(
       rootMoveHint,
       rootMoveFilter: rootMoveFilter ?? undefined,
       ply1MoveFilter: ply1MoveFilter ?? undefined,
+      ply2MoveFilter: ply2MoveFilter ?? undefined,
     });
     return sanitizeRootMove(result);
   }
@@ -1239,6 +1297,7 @@ export function findBestMove(
     nnueWeights,
     rootMoveFilter: rootMoveFilter ?? undefined,
     ply1MoveFilter: ply1MoveFilter ?? undefined,
+    ply2MoveFilter: ply2MoveFilter ?? undefined,
   });
   return sanitizeRootMove(result);
 }

@@ -3,32 +3,36 @@ import type { Color, Move } from './types';
 import { BLACK, WHITE } from './types';
 import { isSingleWinMove } from './utils';
 import type { OpeningPreset } from '../types';
+import {
+  LONG_PRO_MIN_MANHATTAN_FROM_CENTER,
+  LONG_PRO_FORBIDDEN_MANHATTAN_RADIUS,
+} from '../openingRules';
 
-export const LONG_PRO_MIN_CHEBYSHEV_FROM_CENTER = 4;
+export { LONG_PRO_FORBIDDEN_MANHATTAN_RADIUS, LONG_PRO_MIN_MANHATTAN_FROM_CENTER };
 
 const CENTER_RC = Math.floor(BOARD_SIZE / 2);
 
-function chebyshevFromCenter(index: number): number {
+function manhattanFromCenter(index: number): number {
   const r = Math.floor(index / BOARD_SIZE);
   const c = index % BOARD_SIZE;
-  return Math.max(Math.abs(r - CENTER_RC), Math.abs(c - CENTER_RC));
+  return Math.abs(r - CENTER_RC) + Math.abs(c - CENTER_RC);
 }
 
 function longProBlackSecondMoveFilter(m: Move): boolean {
   // Long Pro: on Black’s second move (third ply overall), rift targets inside the forbidden
-  // center region are not allowed.
+  // center diamond (Manhattan distance <= 2) are not allowed.
   if (m.action === 'rift') {
-    return chebyshevFromCenter(m.pos) >= LONG_PRO_MIN_CHEBYSHEV_FROM_CENTER;
+    return manhattanFromCenter(m.pos) >= LONG_PRO_MIN_MANHATTAN_FROM_CENTER;
   }
   if (m.action !== 'reinforce') return true;
 
   // Long Pro: Black must place exactly 2 stones on this move (no single-stone moves, even if winning).
   if (isSingleWinMove(m)) return false;
 
-  // Both stones must be outside the blocked center region.
+  // Both stones must be outside the blocked center diamond.
   return (
-    chebyshevFromCenter(m.pos1) >= LONG_PRO_MIN_CHEBYSHEV_FROM_CENTER &&
-    chebyshevFromCenter(m.pos2) >= LONG_PRO_MIN_CHEBYSHEV_FROM_CENTER
+    manhattanFromCenter(m.pos1) >= LONG_PRO_MIN_MANHATTAN_FROM_CENTER &&
+    manhattanFromCenter(m.pos2) >= LONG_PRO_MIN_MANHATTAN_FROM_CENTER
   );
 }
 
@@ -42,8 +46,8 @@ export function getOpeningRootMoveFilter(
 ): ((m: Move) => boolean) | null {
   if (openingPreset !== 'long-pro') return null;
   if (player !== BLACK) return null;
-  if (moveIndex !== 2) return null;
-  return longProBlackSecondMoveFilter;
+  if (moveIndex === 2) return longProBlackSecondMoveFilter;
+  return null;
 }
 
 /**

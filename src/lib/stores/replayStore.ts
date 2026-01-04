@@ -3,10 +3,12 @@
  */
 
 import { writable, derived, get } from 'svelte/store';
-import type { MoveRecord, Stone, Position, PlayerColor, OpeningPreset } from '$lib/game/types';
-import { createInitialBoard, BOARD_SIZE } from '$lib/game/types';
+import type { MoveRecord, Stone, Position, PlayerColor, OpeningPreset, ScoreToWin, EndReason } from '$lib/game/types';
+import { createInitialBoard, BOARD_SIZE, getOpeningFirstPlayer, getOpponent } from '$lib/game/types';
 import { flattenUniquePositions } from '$lib/game/scoredLines';
+import { computeInvalidPositions } from '$lib/game/invalidPositions';
 import { gameStore } from './gameStore';
+import type { SaveFileData } from '$lib/game/saveFile';
 
 interface ReplayState {
   active: boolean;
@@ -14,6 +16,76 @@ interface ReplayState {
   currentIndex: number; // 0 = start (empty board), n = after move n
   openingPreset: OpeningPreset;
   autoPlayInterval: ReturnType<typeof setInterval> | null;
+}
+
+function getPlayerToMove(openingPreset: OpeningPreset, moveIndex: number): PlayerColor {
+  const first = getOpeningFirstPlayer(openingPreset);
+  return moveIndex % 2 === 0 ? first : getOpponent(first);
+}
+
+function getLastRiftedPosition(moves: MoveRecord[], upToIndex: number): Position | null {
+  if (upToIndex <= 0 || upToIndex > moves.length) return null;
+  const move = moves[upToIndex - 1];
+  return move.action === 'rift' ? move.removedStone ?? null : null;
+}
+
+/**
+ * Reconstruct board state by applying moves up to the given index
+ */
+function reconstructBoard(moves: MoveRecord[], upToIndex: number, openingPreset: OpeningPreset): Stone[][] {
+  const board = createInitialBoard(openingPreset);
+
+  for (let i = 0; i < upToIndex && i < moves.length; i++) {
+    const move = moves[i];
+
+    if (move.action === 'reinforce') {
+      for (const pos of move.positions) {
+        board[pos.row][pos.col] = move.player;
+      }
+    } else if (move.action === 'rift' && move.removedStone) {
+      board[move.removedStone.row][move.removedStone.col] = null;
+    }
+
+    if (move.scoredLines) {
+      for (const line of move.scoredLines) {
+        for (const pos of line) {
+          if (pos.row < 0 || pos.row >= BOARD_SIZE || pos.col < 0 || pos.col >= BOARD_SIZE) continue;
+          board[pos.row][pos.col] = null;
+        }
+      }
+    }
+  }
+
+  return board;
+}
+
+/**
+ * Get the positions affected by the move at the given index (for highlighting)
+ */
+function getMoveHighlights(moves: MoveRecord[], index: number): {
+  placed: Position[];
+  removed: Position | null;
+  winningLine: Position[] | null;
+  winningLineBy: PlayerColor | null;
+} {
+  if (index <= 0 || index > moves.length) {
+    return { placed: [], removed: null, winningLine: null, winningLineBy: null };
+  }
+
+  const move = moves[index - 1];
+
+  let winningLine: Position[] | null = null;
+  let winningLineBy: PlayerColor | null = null;
+  if (move.scoredLines && move.scoredLines.length > 0) {
+    winningLine = flattenUniquePositions(move.scoredLines);
+    winningLineBy = move.scoredBy ?? move.player;
+  }
+
+  if (move.action === 'reinforce') {
+    return { placed: move.positions, removed: null, winningLine, winningLineBy };
+  } else {
+    return { placed: [], removed: move.removedStone ?? null, winningLine, winningLineBy };
+  }
 }
 
 function createReplayStore() {
@@ -47,65 +119,6 @@ function createReplayStore() {
       };
     });
   });
-
-  /**
-   * Reconstruct board state by applying moves up to the given index
-   */
-  function reconstructBoard(moves: MoveRecord[], upToIndex: number, openingPreset: OpeningPreset): Stone[][] {
-    const board = createInitialBoard(openingPreset);
-    
-    for (let i = 0; i < upToIndex && i < moves.length; i++) {
-      const move = moves[i];
-      
-      if (move.action === 'reinforce') {
-        for (const pos of move.positions) {
-          board[pos.row][pos.col] = move.player;
-        }
-      } else if (move.action === 'rift' && move.removedStone) {
-        board[move.removedStone.row][move.removedStone.col] = null;
-      }
-
-      if (move.scoredLines) {
-        for (const line of move.scoredLines) {
-          for (const pos of line) {
-            if (pos.row < 0 || pos.row >= BOARD_SIZE || pos.col < 0 || pos.col >= BOARD_SIZE) continue;
-            board[pos.row][pos.col] = null;
-          }
-        }
-      }
-    }
-    
-    return board;
-  }
-
-  /**
-   * Get the positions affected by the move at the given index (for highlighting)
-   */
-  function getMoveHighlights(moves: MoveRecord[], index: number): {
-    placed: Position[];
-    removed: Position | null;
-    winningLine: Position[] | null;
-    winningLineBy: PlayerColor | null;
-  } {
-    if (index <= 0 || index > moves.length) {
-      return { placed: [], removed: null, winningLine: null, winningLineBy: null };
-    }
-    
-    const move = moves[index - 1];
-
-    let winningLine: Position[] | null = null;
-    let winningLineBy: PlayerColor | null = null;
-    if (move.scoredLines && move.scoredLines.length > 0) {
-      winningLine = flattenUniquePositions(move.scoredLines);
-      winningLineBy = move.scoredBy ?? move.player;
-    }
-    
-    if (move.action === 'reinforce') {
-      return { placed: move.positions, removed: null, winningLine, winningLineBy };
-    } else {
-      return { placed: [], removed: move.removedStone ?? null, winningLine, winningLineBy };
-    }
-  }
 
   return {
     subscribe,
@@ -153,6 +166,34 @@ function createReplayStore() {
       });
       
       gameStore.setPhase('ended');
+    },
+
+    /**
+     * Enter replay mode from an imported save file
+     */
+    enterReplayFromSave(save: SaveFileData) {
+      update(state => {
+        if (state.autoPlayInterval) {
+          clearInterval(state.autoPlayInterval);
+        }
+        return {
+          active: true,
+          moveHistory: [...save.moves],
+          currentIndex: 0,
+          openingPreset: save.metadata.opening,
+          autoPlayInterval: null
+        };
+      });
+
+      // Set up gameStore for replay display
+      gameStore.loadForReplay({
+        openingPreset: save.metadata.opening,
+        winner: save.metadata.winner,
+        endReason: save.metadata.endReason,
+        scores: save.metadata.scores,
+        scoreToWin: save.metadata.scoreToWin,
+        moveHistory: save.moves,
+      });
     },
 
     /**
@@ -270,48 +311,39 @@ export const replayIndex = derived(replayStore, $state => $state.currentIndex);
 export const replayMoveCount = derived(replayStore, $state => $state.moveHistory.length);
 export const isAutoPlaying = derived(replayStore, $state => $state.autoPlayInterval !== null);
 
+export const replayPlayerToMove = derived(replayStore, $state => {
+  if (!$state.active) return null;
+  return getPlayerToMove($state.openingPreset, $state.currentIndex);
+});
+
 // Derived board state for replay
 export const replayBoard = derived(replayStore, $state => {
   if (!$state.active) return null;
-  
-  const board = createInitialBoard($state.openingPreset);
-  
-  for (let i = 0; i < $state.currentIndex && i < $state.moveHistory.length; i++) {
-    const move = $state.moveHistory[i];
-    
-    if (move.action === 'reinforce') {
-      for (const pos of move.positions) {
-        board[pos.row][pos.col] = move.player;
-      }
-    } else if (move.action === 'rift' && move.removedStone) {
-      board[move.removedStone.row][move.removedStone.col] = null;
-    }
-
-    if (move.scoredLines) {
-      for (const line of move.scoredLines) {
-        for (const pos of line) {
-          if (pos.row < 0 || pos.row >= BOARD_SIZE || pos.col < 0 || pos.col >= BOARD_SIZE) continue;
-          board[pos.row][pos.col] = null;
-        }
-      }
-    }
-  }
-  
-  return board;
+  return reconstructBoard($state.moveHistory, $state.currentIndex, $state.openingPreset);
 });
 
 // Derived highlights for the current move being viewed
 export const replayHighlights = derived(replayStore, $state => {
-  if (!$state.active || $state.currentIndex <= 0) {
-    return { placed: [] as Position[], removed: null as Position | null };
+  if (!$state.active) {
+    return { placed: [] as Position[], removed: null as Position | null, winningLine: null as Position[] | null, winningLineBy: null as PlayerColor | null };
   }
-  
-  const move = $state.moveHistory[$state.currentIndex - 1];
-  
-  if (move.action === 'reinforce') {
-    return { placed: move.positions, removed: null as Position | null };
-  } else {
-    return { placed: [] as Position[], removed: move.removedStone ?? null };
-  }
+  return getMoveHighlights($state.moveHistory, $state.currentIndex);
+});
+
+export const replayInvalidPositions = derived([replayStore, replayBoard], ([$state, board]) => {
+  if (!$state.active || !board) return new Set<string>();
+
+  const moveHistory = $state.moveHistory.slice(0, $state.currentIndex);
+  const currentPlayer = getPlayerToMove($state.openingPreset, $state.currentIndex);
+  const lastRiftedPosition = getLastRiftedPosition($state.moveHistory, $state.currentIndex);
+
+  return computeInvalidPositions({
+    board,
+    currentPlayer,
+    openingPreset: $state.openingPreset,
+    moveHistory,
+    pendingPlacements: [],
+    lastRiftedPosition,
+  });
 });
 

@@ -1,9 +1,14 @@
 <script lang="ts">
   import { gameStore } from '$lib/stores/gameStore';
+  import { replayStore } from '$lib/stores/replayStore';
+  import { parseGame, IntegrityError } from '$lib/game/saveFile';
   import type { OpeningPreset, PlayerColor, ScoreToWin } from '$lib/game/types';
+  import { LONG_PRO_FORBIDDEN_MANHATTAN_RADIUS } from '$lib/game/openingRules';
 
   let showColorChoice = $state(false);
   let showSpectateChoice = $state(false);
+  let fileInput: HTMLInputElement;
+  let loadError = $state<string | null>(null);
   const scoreToWinOptions: ScoreToWin[] = [1, 3, 5, 0];
   let selectedScoreToWin = $state<ScoreToWin>(1);
   const openingOptions = [
@@ -32,6 +37,34 @@
 
   function startSpectateGame() {
     gameStore.startGame('ai-vs-ai', selectedSpectateTimeMsBlack, selectedSpectateTimeMsWhite, selectedScoreToWin, selectedOpeningPreset);
+  }
+
+  function triggerFileSelect() {
+    loadError = null;
+    fileInput?.click();
+  }
+
+  async function handleFileSelect(event: Event) {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    try {
+      const content = await file.text();
+      const save = await parseGame(content);
+      replayStore.enterReplayFromSave(save);
+    } catch (err) {
+      if (err instanceof IntegrityError) {
+        loadError = `Integrity check failed: ${err.message}`;
+      } else if (err instanceof Error) {
+        loadError = `Failed to load replay: ${err.message}`;
+      } else {
+        loadError = 'Failed to load replay';
+      }
+    } finally {
+      // Reset input so the same file can be selected again
+      input.value = '';
+    }
   }
 </script>
 
@@ -163,6 +196,20 @@
           </div>
         </div>
       {/if}
+
+      <button class="btn menu-btn load" onclick={triggerFileSelect}>
+        📂 Load Replay
+      </button>
+      <input
+        type="file"
+        accept=".grr"
+        bind:this={fileInput}
+        onchange={handleFileSelect}
+        style="display: none;"
+      />
+      {#if loadError}
+        <div class="load-error">{loadError}</div>
+      {/if}
     </div>
 
     <div class="rules">
@@ -170,7 +217,7 @@
       <p><strong>✕</strong> Remove 1 enemy stone (Ko rule)</p>
       <p><strong>5</strong> in a row scores +1 and clears (not 6+)</p>
       {#if selectedOpeningPreset === 'long-pro'}
-        <p><strong>Opening</strong> Long Pro: Black 1 at center; White 2; Black 2 outside center (≥4)</p>
+        <p><strong>Opening</strong> Long Pro: Black 1 at center; White 2; Black 2 outside center diamond (d&gt;{LONG_PRO_FORBIDDEN_MANHATTAN_RADIUS})</p>
       {:else if selectedOpeningPreset === 'legacy-black-center-white-first'}
         <p><strong>Opening</strong> Legacy: black is pre-placed at center; White moves first</p>
       {:else}
@@ -252,6 +299,20 @@
 
   .btn.spectate {
     background: #16a085;
+  }
+
+  .btn.load {
+    background: #2c3e50;
+  }
+
+  .load-error {
+    padding: 8px 12px;
+    background: rgba(255, 71, 87, 0.15);
+    border: 1px solid var(--danger);
+    border-radius: 6px;
+    color: var(--danger);
+    font-size: 12px;
+    text-align: left;
   }
 
   .color-choice {

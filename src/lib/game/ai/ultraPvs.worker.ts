@@ -23,6 +23,22 @@ import { getBundledWeightsUrl, loadNnueWeightsOptional } from './nnue/weights';
 import type { SharedTranspositionTableBacking } from './transposition';
 import type { OpeningPreset } from '../types';
 import { getOpeningPly1ReplyMoveFilter } from './openingFilters';
+import { LONG_PRO_RIFT_FORBIDDEN_FIRST_TURNS } from '../riftRules';
+
+const NO_RIFT_FILTER = (m: Move): boolean => m.action !== 'rift';
+
+function combineMoveFilters(
+  a: ((m: Move) => boolean) | null,
+  b: ((m: Move) => boolean) | null
+): ((m: Move) => boolean) | null {
+  if (a && b) return (m: Move) => a(m) && b(m);
+  return a ?? b;
+}
+
+function noRiftFilterForOpening(openingPreset: OpeningPreset, moveIndex: number): ((m: Move) => boolean) | null {
+  if (openingPreset !== 'long-pro') return null;
+  return moveIndex < LONG_PRO_RIFT_FORBIDDEN_FIRST_TURNS ? NO_RIFT_FILTER : null;
+}
 
 type LegacyBoard = (string | null)[][];
 
@@ -111,6 +127,7 @@ let rootBoard: Board | null = null;
 let rootPlayer: Color | null = null;
 let rootNnueWeights: NnueWeights | null = null;
 let replyRootMoveFilter: ((m: Move) => boolean) | null = null;
+let replyPly1MoveFilter: ((m: Move) => boolean) | null = null;
 
 function msLeft(deadlineMs: number): number {
   return deadlineMs - Date.now();
@@ -137,7 +154,12 @@ self.onmessage = (e: MessageEvent) => {
     // child search we run after each root move.
     const openingPreset = normalizeOpeningPreset(msg.state.openingPreset);
     const moveIndex = normalizeMoveIndex(msg.state.moveIndex);
-    replyRootMoveFilter = getOpeningPly1ReplyMoveFilter(openingPreset, moveIndex, player);
+    const childMoveIndex = moveIndex + 1;
+    replyRootMoveFilter = combineMoveFilters(
+      getOpeningPly1ReplyMoveFilter(openingPreset, moveIndex, player),
+      noRiftFilterForOpening(openingPreset, childMoveIndex)
+    );
+    replyPly1MoveFilter = noRiftFilterForOpening(openingPreset, childMoveIndex + 1);
     // Don't block the coordinator on NNUE I/O; start searching immediately and let
     // weights become available opportunistically (fallback eval is fine meanwhile).
     rootNnueWeights = null;
@@ -204,7 +226,8 @@ self.onmessage = (e: MessageEvent) => {
       rootNnueWeights,
       // Passing the root move as prevMove lets countermove/continuation history order replies.
       msg.rootMove,
-      replyRootMoveFilter
+      replyRootMoveFilter,
+      replyPly1MoveFilter
     );
 
     const out: SearchRootMoveResponse = {

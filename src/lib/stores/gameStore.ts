@@ -1,9 +1,19 @@
 import { writable, derived, get } from 'svelte/store';
-import type { GameState, Position, GameMode, Action, PlayerColor, GamePhase, ScoreToWin, EndReason, OpeningPreset } from '$lib/game/types';
+import type { GameState, Position, GameMode, Action, PlayerColor, GamePhase, ScoreToWin, EndReason, OpeningPreset, MoveRecord } from '$lib/game/types';
 import { createInitialBoard, getOpeningFirstPlayer, BOARD_SIZE } from '$lib/game/types';
 import { flattenUniquePositions } from '$lib/game/scoredLines';
 import { wouldScoreWithSingleStone } from '$lib/game/validator';
 import { isLongProForcedCenterMove } from '$lib/game/openingRules';
+
+function getWhiteFirstReinforcePositions(moveHistory: GameState['moveHistory']): Position[] | null {
+  for (const m of moveHistory) {
+    if (m.player === 'white' && m.action === 'reinforce') {
+      // Defensive copy for external consumers.
+      return m.positions.map(p => ({ row: p.row, col: p.col }));
+    }
+  }
+  return null;
+}
 
 function clearScoredLinesInPlace(board: GameState['board'], scoredLines: Position[][]): void {
   if (scoredLines.length === 0) return;
@@ -329,23 +339,55 @@ function createGameStore() {
     },
 
     setWinner(winner: PlayerColor, winningLine: Position[] | null = null) {
-      update(state => ({
-        ...state,
-        winner,
-        winningLine: winningLine || state.winningLine,
-        endReason: state.endReason ?? 'score',
-        phase: 'ended'
-      }));
+      update(state => {
+        const newState = {
+          ...state,
+          winner,
+          winningLine: winningLine || state.winningLine,
+          endReason: state.endReason ?? 'score',
+          phase: 'ended' as const
+        };
+        // Dispatch custom event for automation tracking
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('grr:gameEnd', {
+            detail: {
+              winner,
+              scores: newState.scores,
+              moveCount: newState.moveHistory.length,
+              endReason: newState.endReason,
+              openingPreset: newState.openingPreset,
+              whiteFirstMovePositions: getWhiteFirstReinforcePositions(newState.moveHistory),
+            }
+          }));
+        }
+        return newState;
+      });
     },
 
     endGame(winner: PlayerColor | null, reason: Exclude<EndReason, null>, winningLine: Position[] | null = null) {
-      update(state => ({
-        ...state,
-        winner,
-        winningLine: winningLine || state.winningLine,
-        endReason: reason,
-        phase: 'ended'
-      }));
+      update(state => {
+        const newState = {
+          ...state,
+          winner,
+          winningLine: winningLine || state.winningLine,
+          endReason: reason,
+          phase: 'ended' as const
+        };
+        // Dispatch custom event for automation tracking
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('grr:gameEnd', {
+            detail: {
+              winner,
+              scores: newState.scores,
+              moveCount: newState.moveHistory.length,
+              endReason: reason,
+              openingPreset: newState.openingPreset,
+              whiteFirstMovePositions: getWhiteFirstReinforcePositions(newState.moveHistory),
+            }
+          }));
+        }
+        return newState;
+      });
     },
 
     setAiThinking(thinking: boolean) {
@@ -359,6 +401,30 @@ function createGameStore() {
       update(state => ({
         ...state,
         phase
+      }));
+    },
+
+    /**
+     * Set up game state for viewing an imported replay.
+     * Puts the store into 'replay' phase with metadata for display.
+     */
+    loadForReplay(opts: {
+      openingPreset: OpeningPreset;
+      winner: PlayerColor | null;
+      endReason: EndReason;
+      scores: { black: number; white: number };
+      scoreToWin: ScoreToWin;
+      moveHistory: GameState['moveHistory'];
+    }) {
+      update(() => ({
+        ...createInitialState(opts.openingPreset),
+        winner: opts.winner,
+        endReason: opts.endReason,
+        scores: opts.scores,
+        scoreToWin: opts.scoreToWin,
+        moveHistory: opts.moveHistory,
+        phase: 'replay',
+        gameMode: 'local', // Imported replays treated as local for UI purposes
       }));
     },
 

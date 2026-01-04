@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { gameStore, pendingPlacements, pendingRift, winningLine, isAiTurn, gamePhase, aiThinking } from '$lib/stores/gameStore';
-  import { isReplaying, replayBoard, replayHighlights, replayStore } from '$lib/stores/replayStore';
-  import { gameEngine } from '$lib/game/engine';
+  import { isReplaying, replayBoard, replayHighlights, replayInvalidPositions, replayPlayerToMove } from '$lib/stores/replayStore';
+  import { gameEngine, isFastMode } from '$lib/game/engine';
   import { setupCanvas, renderBoard, getCursorStyle } from '$lib/utils/canvas';
   import type { Position, PlayerColor } from '$lib/game/types';
   import { BOARD_SIZE } from '$lib/game/types';
@@ -66,22 +66,24 @@
     if (isNewGameStart && 
         (state.gameMode === 'ai-vs-ai' || (state.gameMode === 'vs-ai' && state.currentPlayer === state.aiColor)) && 
         !state.aiThinking) {
-      setTimeout(() => gameEngine.executeAiTurn(), 500);
+      setTimeout(() => gameEngine.executeAiTurn(), isFastMode() ? 0 : 500);
     }
   });
 
   // Re-render when game state changes
   $effect(() => {
     if (!ctx) return;
-    
-    const state = $gameStore;
-    const pending = $pendingPlacements;
-    const rift = $pendingRift;
-    const winLine = $winningLine;
-    const replaying = $isReplaying;
-    const rBoard = $replayBoard;
-    const rHighlights = $replayHighlights;
-    
+
+    void $gameStore;
+    void $pendingPlacements;
+    void $pendingRift;
+    void $winningLine;
+    void $isReplaying;
+    void $replayBoard;
+    void $replayHighlights;
+    void $replayInvalidPositions;
+    void $replayPlayerToMove;
+
     render();
   });
 
@@ -118,11 +120,15 @@
     if (!ctx) return;
     
     const state = gameStore.getState();
-    const replaying = replayStore.getBoard !== undefined && state.phase === 'replay';
+    const replaying = state.phase === 'replay';
     
     if (replaying) {
-      const board = replayStore.getBoard();
-      const highlights = replayStore.getHighlights();
+      const board = $replayBoard;
+      const highlights = $replayHighlights;
+      const currentPlayer = $replayPlayerToMove ?? 'black';
+      const invalidPositions = $replayInvalidPositions;
+
+      if (!board) return;
       
       renderBoard(ctx, {
         cellSize,
@@ -132,11 +138,11 @@
         pendingRift: null,
         lastPlacedPositions: highlights.placed,
         lastRiftedPosition: highlights.removed,
-        currentPlayer: replayStore.getCurrentMovePlayer() ?? 'black',
+        currentPlayer,
         hoverPosition: null,
         winningLine: highlights.winningLine,
         winningLineBy: highlights.winningLineBy,
-        invalidPositions: new Set<string>(),
+        invalidPositions,
         gameEnded: false
       });
     } else {

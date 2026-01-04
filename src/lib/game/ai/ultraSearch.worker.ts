@@ -23,6 +23,22 @@ import { getBundledWeightsUrl, loadNnueWeightsOptional } from './nnue/weights';
 import { TranspositionTable } from './transposition';
 import type { OpeningPreset } from '../types';
 import { getOpeningPly1ReplyMoveFilter } from './openingFilters';
+import { LONG_PRO_RIFT_FORBIDDEN_FIRST_TURNS } from '../riftRules';
+
+const NO_RIFT_FILTER = (m: Move): boolean => m.action !== 'rift';
+
+function combineMoveFilters(
+  a: ((m: Move) => boolean) | null,
+  b: ((m: Move) => boolean) | null
+): ((m: Move) => boolean) | null {
+  if (a && b) return (m: Move) => a(m) && b(m);
+  return a ?? b;
+}
+
+function noRiftFilterForOpening(openingPreset: OpeningPreset, moveIndex: number): ((m: Move) => boolean) | null {
+  if (openingPreset !== 'long-pro') return null;
+  return moveIndex < LONG_PRO_RIFT_FORBIDDEN_FIRST_TURNS ? NO_RIFT_FILTER : null;
+}
 
 type LegacyBoard = (string | null)[][];
 
@@ -120,6 +136,12 @@ self.onmessage = (e: MessageEvent) => {
     const openingPreset = normalizeOpeningPreset(req.state.openingPreset);
     const moveIndex = normalizeMoveIndex(req.state.moveIndex);
     const replyRootFilter = getOpeningPly1ReplyMoveFilter(openingPreset, moveIndex, rootPlayer);
+    const childMoveIndex = moveIndex + 1;
+    const childRootFilter = combineMoveFilters(
+      replyRootFilter,
+      noRiftFilterForOpening(openingPreset, childMoveIndex)
+    );
+    const childPly1Filter = noRiftFilterForOpening(openingPreset, childMoveIndex + 1);
 
     // Prepare one child session per root move.
     const sessions: Array<{
@@ -142,7 +164,7 @@ self.onmessage = (e: MessageEvent) => {
         continue;
       }
 
-      const session = createSearchSession(child, opponent, maxDepth, tt, nnueWeights, replyRootFilter);
+      const session = createSearchSession(child, opponent, maxDepth, tt, nnueWeights, childRootFilter, childPly1Filter, null);
       sessions.push({ rootMove: mv, immediate: null, session, nodes: 0 });
     }
 

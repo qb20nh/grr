@@ -43,6 +43,22 @@ import { randomDihedral, applyInverseDihedralPos, transformLegacyBoard, transfor
 import type { OpeningPreset } from './types';
 import type { SharedTranspositionTableBacking } from './ai/index';
 import { getOpeningPly1ReplyMoveFilter, getOpeningRootMoveFilter } from './ai/openingFilters';
+import { LONG_PRO_RIFT_FORBIDDEN_FIRST_TURNS } from './riftRules';
+
+const NO_RIFT_FILTER = (m: Move): boolean => m.action !== 'rift';
+
+function combineMoveFilters(
+  a: ((m: Move) => boolean) | null,
+  b: ((m: Move) => boolean) | null
+): ((m: Move) => boolean) | null {
+  if (a && b) return (m: Move) => a(m) && b(m);
+  return a ?? b;
+}
+
+function noRiftFilterForOpening(openingPreset: OpeningPreset, moveIndex: number): ((m: Move) => boolean) | null {
+  if (openingPreset !== 'long-pro') return null;
+  return moveIndex < LONG_PRO_RIFT_FORBIDDEN_FIRST_TURNS ? NO_RIFT_FILTER : null;
+}
 
 interface WorkerState {
   board: (string | null)[][];
@@ -368,7 +384,15 @@ function refreshPredictedLine(): void {
   const replyPlayer = getOpponent(ponderLatestPosition.player);
   ponderPredictedChildHash = child.hash.toString();
   const replyMoveIndex = ponderLatestPosition.moveIndex + 1;
-  const replyRootFilter = getOpeningRootMoveFilter(ponderLatestPosition.openingPreset, replyMoveIndex, replyPlayer);
+  const replyRootFilter = combineMoveFilters(
+    getOpeningRootMoveFilter(ponderLatestPosition.openingPreset, replyMoveIndex, replyPlayer),
+    noRiftFilterForOpening(ponderLatestPosition.openingPreset, replyMoveIndex)
+  );
+  const replyPly1Filter = combineMoveFilters(
+    getOpeningPly1ReplyMoveFilter(ponderLatestPosition.openingPreset, replyMoveIndex, replyPlayer),
+    noRiftFilterForOpening(ponderLatestPosition.openingPreset, replyMoveIndex + 1)
+  );
+  const replyPly2Filter = noRiftFilterForOpening(ponderLatestPosition.openingPreset, replyMoveIndex + 2);
 
   // Reset reply totals when the predicted line changes.
   ponderReplyTotalsNodes = 0;
@@ -376,14 +400,23 @@ function refreshPredictedLine(): void {
 
   const tt = getTranspositionTable();
   if (!ponderReplySession) {
-    ponderReplySession = createSearchSession(child, replyPlayer, ponderMaxDepth, tt, ponderNnueWeights, replyRootFilter);
+    ponderReplySession = createSearchSession(
+      child,
+      replyPlayer,
+      ponderMaxDepth,
+      tt,
+      ponderNnueWeights,
+      replyRootFilter,
+      replyPly1Filter,
+      replyPly2Filter
+    );
   } else {
-    ponderReplySession.setPosition(child, replyPlayer);
+    ponderReplySession.setPosition(child, replyPlayer, replyRootFilter, replyPly1Filter, replyPly2Filter);
   }
 
   if (ponderDebug) {
     console.log('[AI Worker] Ponder predicted line updated', {
-      predictedMove: moveToLogObject(bestMove),
+      predictedMove: moveToLogObject(predictedMove),
       predictedChildHash: ponderPredictedChildHash,
     });
   }
@@ -497,7 +530,16 @@ async function startPondering(request: PonderStartRequest): Promise<void> {
   ponderNnueWeights = nnueWeights;
 
   const tt = getTranspositionTable();
-  ponderRootSession = createSearchSession(board, player, ponderMaxDepth, tt, nnueWeights, null);
+  const rootMoveFilter = combineMoveFilters(
+    getOpeningRootMoveFilter(openingPreset, moveIndex, player),
+    noRiftFilterForOpening(openingPreset, moveIndex)
+  );
+  const ply1MoveFilter = combineMoveFilters(
+    getOpeningPly1ReplyMoveFilter(openingPreset, moveIndex, player),
+    noRiftFilterForOpening(openingPreset, moveIndex + 1)
+  );
+  const ply2MoveFilter = noRiftFilterForOpening(openingPreset, moveIndex + 2);
+  ponderRootSession = createSearchSession(board, player, ponderMaxDepth, tt, nnueWeights, rootMoveFilter, ply1MoveFilter, ply2MoveFilter);
   refreshPredictedLine();
 
   if (ponderDebug) {
@@ -530,7 +572,16 @@ function updatePonderPosition(request: PositionUpdateRequest): void {
   lastPonderSummary = null;
 
   if (ponderRootSession) {
-    ponderRootSession.setPosition(board, player);
+    const rootMoveFilter = combineMoveFilters(
+      getOpeningRootMoveFilter(openingPreset, moveIndex, player),
+      noRiftFilterForOpening(openingPreset, moveIndex)
+    );
+    const ply1MoveFilter = combineMoveFilters(
+      getOpeningPly1ReplyMoveFilter(openingPreset, moveIndex, player),
+      noRiftFilterForOpening(openingPreset, moveIndex + 1)
+    );
+    const ply2MoveFilter = noRiftFilterForOpening(openingPreset, moveIndex + 2);
+    ponderRootSession.setPosition(board, player, rootMoveFilter, ply1MoveFilter, ply2MoveFilter);
   }
   ponderReplySession = null;
   refreshPredictedLine();
@@ -556,9 +607,34 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
     // Ensure a dihedral exists for this move (AI-vs-AI has no ponderStart).
     ensureActiveDihedral();
     const { board, player, openingPreset, moveIndex } = convertState(request.state);
-    const rootMoveFilter = getOpeningRootMoveFilter(openingPreset, moveIndex, player);
-    const ply1ReplyMoveFilter = getOpeningPly1ReplyMoveFilter(openingPreset, moveIndex, player);
+    const rootMoveFilter = combineMoveFilters(
+      getOpeningRootMoveFilter(openingPreset, moveIndex, player),
+      noRiftFilterForOpening(openingPreset, moveIndex)
+    );
+    const ply1ReplyMoveFilter = combineMoveFilters(
+      getOpeningPly1ReplyMoveFilter(openingPreset, moveIndex, player),
+      noRiftFilterForOpening(openingPreset, moveIndex + 1)
+    );
+    const ply2MoveFilter = noRiftFilterForOpening(openingPreset, moveIndex + 2);
     
+    // Special-case: Long Pro forced opening move (Black must play center single stone on move 0).
+    if (openingPreset === 'long-pro' && moveIndex === 0 && player === BLACK) {
+      // Clear ponder sessions after using them (next turn will start new pondering).
+      resetPonderingState();
+      clearActiveDihedral();
+      return {
+        type: 'result',
+        move: {
+          action: 'reinforce',
+          positions: untransformPositions([{ row: CENTER_RC, col: CENTER_RC }]),
+          score: 0,
+          depth: 0,
+          nodes: 0,
+          time: Date.now() - startTime,
+        },
+      };
+    }
+
     // ---- Time allocation (hard-capped) ----
     // Default behavior is to use the caller's full per-move budget (clamped),
     // and rely on the search to terminate early only for forced outcomes.
@@ -581,24 +657,6 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
         maxDepth,
         stoneCount: board.blackCount + board.whiteCount,
       });
-    }
-
-    // Special-case: Long Pro forced opening move (Black must play center single stone on move 0).
-    if (openingPreset === 'long-pro' && moveIndex === 0 && player === BLACK) {
-      // Clear ponder sessions after using them (next turn will start new pondering).
-      resetPonderingState();
-      clearActiveDihedral();
-      return {
-        type: 'result',
-        move: {
-          action: 'reinforce',
-          positions: untransformPositions([{ row: CENTER_RC, col: CENTER_RC }]),
-          score: 0,
-          depth: 0,
-          nodes: 0,
-          time: Date.now() - startTime,
-        },
-      };
     }
 
     const nnueWeights = await getNnueWeights();
@@ -900,7 +958,16 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
           // Last-resort: run a local search for whatever time remains (at least a tiny slice),
           // so we don't return a misleading "all zeros" stat line.
           const remainingMs = Math.max(25, deadlineMs - Date.now());
-          const local = findBestMove(board, player, remainingMs, maxDepth, nnueWeights, rootMoveFilter, ply1ReplyMoveFilter);
+          const local = findBestMove(
+            board,
+            player,
+            remainingMs,
+            maxDepth,
+            nnueWeights,
+            rootMoveFilter,
+            ply1ReplyMoveFilter,
+            ply2MoveFilter
+          );
           result = local;
           nodes = local.nodes ?? 0;
         } else {
@@ -1097,7 +1164,7 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
         usedReplySession = true;
         result = ponderReplySession.searchSlice(timeLimit);
       } else {
-        result = findBestMove(board, player, timeLimit, maxDepth, nnueWeights, rootMoveFilter, ply1ReplyMoveFilter);
+        result = findBestMove(board, player, timeLimit, maxDepth, nnueWeights, rootMoveFilter, ply1ReplyMoveFilter, ply2MoveFilter);
       }
       nodes = result.nodes ?? 0;
     }

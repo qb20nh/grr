@@ -48,6 +48,23 @@ body {
   overflow-y: auto;
 }
 
+/* Arena embedded gameplay: disable scrolling + hide scrollbars. */
+html.arena-mode,
+body.arena-mode {
+  overflow: hidden !important;
+  overscroll-behavior: none;
+}
+
+body.arena-mode {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge legacy */
+}
+
+body.arena-mode::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 button {
   font-family: inherit;
   cursor: pointer;
