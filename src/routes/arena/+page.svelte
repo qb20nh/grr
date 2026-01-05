@@ -6,16 +6,6 @@
 
   type Winner = 'black' | 'white' | null;
 
-  declare global {
-    interface Window {
-      __grrArenaDone?: boolean;
-      __grrArenaReport?: unknown;
-      __grrArenaSuggestedFilename?: string;
-      __grrArenaGetCheckpoint?: () => unknown;
-      __grrArenaRestore?: unknown;
-    }
-  }
-
   interface GameEndMessage {
     type: 'grr:gameEnd';
     session: number;

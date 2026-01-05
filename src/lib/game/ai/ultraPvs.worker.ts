@@ -10,7 +10,6 @@ import {
   boardFrom2D,
   cloneBoard,
   getOpponent,
-  getWinnerAfterMove,
   makeMove,
   BLACK,
   WHITE,
@@ -18,8 +17,7 @@ import {
   TranspositionTable,
 } from './index';
 import type { Board, Color, Move } from './types';
-import type { NnueWeights } from './nnue/weights';
-import { getBundledWeightsUrl, loadNnueWeightsOptional } from './nnue/weights';
+import { applyScoringAndClear } from './board';
 import type { SharedTranspositionTableBacking } from './transposition';
 import type { OpeningPreset } from '../types';
 import { getOpeningPly1ReplyMoveFilter } from './openingFilters';
@@ -46,6 +44,8 @@ interface WorkerState {
   board: LegacyBoard;
   playerToMove: 'black' | 'white';
   lastRiftedPosition: { row: number; col: number } | null;
+  scores?: { black: number; white: number };
+  scoreToWin?: number;
   openingPreset?: OpeningPreset;
   moveIndex?: number;
 }
@@ -113,19 +113,29 @@ function normalizeOpeningPreset(value: unknown): OpeningPreset {
   return 'long-pro';
 }
 
-// ---- NNUE weights (optional, cached per worker) ----
-let nnueWeightsPromise: Promise<NnueWeights | null> | null = null;
-function getNnueWeights(): Promise<NnueWeights | null> {
-  if (!nnueWeightsPromise) {
-    nnueWeightsPromise = loadNnueWeightsOptional(getBundledWeightsUrl());
-  }
-  return nnueWeightsPromise;
+function normalizeNonNegativeInt(value: unknown, fallback: number): number {
+  if (typeof value !== 'number') return fallback;
+  if (!Number.isFinite(value) || value < 0) return fallback;
+  return Math.floor(value);
+}
+
+function normalizeScores(value: unknown): { black: number; white: number } {
+  const v = value as any;
+  return {
+    black: normalizeNonNegativeInt(v?.black, 0),
+    white: normalizeNonNegativeInt(v?.white, 0),
+  };
+}
+
+function normalizeScoreToWin(value: unknown): number {
+  return normalizeNonNegativeInt(value, 1);
 }
 
 let tt: TranspositionTable | null = null;
 let rootBoard: Board | null = null;
 let rootPlayer: Color | null = null;
-let rootNnueWeights: NnueWeights | null = null;
+let rootScores: { black: number; white: number } = { black: 0, white: 0 };
+let rootScoreToWin = 1;
 let replyRootMoveFilter: ((m: Move) => boolean) | null = null;
 let replyPly1MoveFilter: ((m: Move) => boolean) | null = null;
 
@@ -149,6 +159,8 @@ self.onmessage = (e: MessageEvent) => {
     const { board, player } = convertState(msg.state);
     rootBoard = board;
     rootPlayer = player;
+    rootScores = normalizeScores(msg.state.scores);
+    rootScoreToWin = normalizeScoreToWin(msg.state.scoreToWin);
     // Long Pro lookahead: when root is White on moveIndex=1, Black's immediate reply (moveIndex=2)
     // is restricted outside the center region. Apply that restriction as the root filter for the
     // child search we run after each root move.
@@ -160,12 +172,6 @@ self.onmessage = (e: MessageEvent) => {
       noRiftFilterForOpening(openingPreset, childMoveIndex)
     );
     replyPly1MoveFilter = noRiftFilterForOpening(openingPreset, childMoveIndex + 1);
-    // Don't block the coordinator on NNUE I/O; start searching immediately and let
-    // weights become available opportunistically (fallback eval is fine meanwhile).
-    rootNnueWeights = null;
-    void (async () => {
-      rootNnueWeights = await getNnueWeights();
-    })();
     const out: PositionReadyResponse = { type: 'ultraPvsPositionReady' };
     self.postMessage(out);
     return;
@@ -195,9 +201,18 @@ self.onmessage = (e: MessageEvent) => {
     const child = cloneBoard(rootBoard);
     makeMove(child, msg.rootMove, rootPlayer);
 
-    const winner = getWinnerAfterMove(child, msg.rootMove, rootPlayer);
-    if (winner !== null) {
-      const score = winner === rootPlayer ? CONFIG.WIN_SCORE : CONFIG.LOSS_SCORE;
+    const childScores = { ...rootScores };
+    const scoring = applyScoringAndClear(child, msg.rootMove, rootPlayer);
+    if (scoring.scoredBy === BLACK) childScores.black += scoring.points;
+    else if (scoring.scoredBy === WHITE) childScores.white += scoring.points;
+
+    const matchWinner =
+      rootScoreToWin !== 0 && (childScores.black >= rootScoreToWin || childScores.white >= rootScoreToWin)
+        ? (childScores.black >= rootScoreToWin ? BLACK : WHITE)
+        : null;
+
+    if (matchWinner !== null) {
+      const score = matchWinner === rootPlayer ? CONFIG.WIN_SCORE : CONFIG.LOSS_SCORE;
       const out: SearchRootMoveResponse = {
         type: 'searchRootMoveResult',
         requestId: msg.requestId,
@@ -223,11 +238,14 @@ self.onmessage = (e: MessageEvent) => {
       -msg.alpha,
       timeLimitMs,
       tt,
-      rootNnueWeights,
+      null,
       // Passing the root move as prevMove lets countermove/continuation history order replies.
       msg.rootMove,
       replyRootMoveFilter,
-      replyPly1MoveFilter
+      replyPly1MoveFilter,
+      null,
+      childScores,
+      rootScoreToWin
     );
 
     const out: SearchRootMoveResponse = {

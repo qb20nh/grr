@@ -287,6 +287,190 @@ export function checkWinAt(board: Board, index: CellIndex, color: Color): boolea
   return false;
 }
 
+export interface ScoringClear {
+  /**
+   * Color that receives the points and whose stones are cleared, if any scoring occurred.
+   *
+   * - Reinforce: `mover`
+   * - Rift: the *removed* color (opponent of `mover`)
+   */
+  scoredBy: Color | null;
+  /**
+   * Number of distinct exact-5 lines scored by this move (match points gained by `scoredBy`).
+   */
+  points: number;
+  /**
+   * Unique stone positions cleared from the board due to scoring.
+   * Null when no scoring occurred.
+   */
+  cleared: CellIndex[] | null;
+}
+
+// ---- Scoring-line clear scratch (avoid per-node Set allocations) ----
+const CLEAR_MASK = new Uint32Array(BOARD_CELLS);
+let clearStamp = 1;
+function nextClearStamp(): number {
+  clearStamp = (clearStamp + 1) >>> 0;
+  if (clearStamp === 0) {
+    CLEAR_MASK.fill(0);
+    clearStamp = 1;
+  }
+  return clearStamp;
+}
+
+function addUniqueLineKey(lineKeys: number[], key: number): boolean {
+  for (let i = 0; i < lineKeys.length; i++) {
+    if (lineKeys[i] === key) return false;
+  }
+  lineKeys.push(key);
+  return true;
+}
+
+function markLineForClear(
+  stamp: number,
+  out: CellIndex[],
+  startIdx: CellIndex,
+  dRow: number,
+  dCol: number
+): void {
+  const offset = dRow * BOARD_SIZE + dCol;
+  let idx = startIdx;
+  for (let i = 0; i < 5; i++) {
+    if (CLEAR_MASK[idx] !== stamp) {
+      CLEAR_MASK[idx] = stamp;
+      out.push(idx);
+    }
+    idx += offset;
+  }
+}
+
+/**
+ * Apply Gomoku Rift scoring rules for the just-made move:
+ * - detect distinct exact-5 scoring lines attributable to the move
+ * - clear (remove) all stones that are part of any scored line (union of positions)
+ *
+ * Important: this MUST be called on the post-move board state (after `makeMove`).
+ */
+export function applyScoringAndClear(board: Board, move: Move, mover: Color): ScoringClear {
+  const stamp = nextClearStamp();
+  const toClear: CellIndex[] = [];
+  const lineKeys: number[] = [];
+
+  if (move.action === 'reinforce') {
+    const scoredBy = mover;
+
+    const maybeScoreAt = (pos: CellIndex): void => {
+      if (board.cells[pos] !== scoredBy) return;
+      const row = Math.floor(pos / BOARD_SIZE);
+      const col = pos % BOARD_SIZE;
+
+      for (let dir = 0; dir < DIRECTIONS.length; dir++) {
+        const [dRow, dCol] = DIRECTIONS[dir]!;
+
+        let forward = 0;
+        let r = row + dRow;
+        let c = col + dCol;
+        while (inBounds(r, c) && board.cells[toIndex(r, c)] === scoredBy) {
+          forward++;
+          r += dRow;
+          c += dCol;
+        }
+
+        let backward = 0;
+        r = row - dRow;
+        c = col - dCol;
+        while (inBounds(r, c) && board.cells[toIndex(r, c)] === scoredBy) {
+          backward++;
+          r -= dRow;
+          c -= dCol;
+        }
+
+        const total = 1 + forward + backward;
+        if (total !== 5) continue;
+
+        const startRow = row - backward * dRow;
+        const startCol = col - backward * dCol;
+        const startIdx = toIndex(startRow, startCol);
+        const key = dir * BOARD_CELLS + startIdx;
+        if (!addUniqueLineKey(lineKeys, key)) continue;
+
+        markLineForClear(stamp, toClear, startIdx, dRow, dCol);
+      }
+    };
+
+    maybeScoreAt(move.pos1);
+    if (!isSingleWinMove(move)) {
+      maybeScoreAt(move.pos2);
+    }
+
+    if (lineKeys.length === 0) {
+      return { scoredBy: null, points: 0, cleared: null };
+    }
+
+    for (const idx of toClear) {
+      removeStone(board, idx);
+    }
+
+    return { scoredBy, points: lineKeys.length, cleared: toClear };
+  }
+
+  // Rift: removing opponent stone can create an exact-5 for the removed color.
+  const scoredBy = getOpponent(mover);
+  const riftPos = move.pos;
+  const row = Math.floor(riftPos / BOARD_SIZE);
+  const col = riftPos % BOARD_SIZE;
+
+  for (let dir = 0; dir < DIRECTIONS.length; dir++) {
+    const [dRow, dCol] = DIRECTIONS[dir]!;
+
+    // Forward segment adjacent to the rifted cell
+    let forward = 0;
+    let r = row + dRow;
+    let c = col + dCol;
+    while (inBounds(r, c) && board.cells[toIndex(r, c)] === scoredBy) {
+      forward++;
+      r += dRow;
+      c += dCol;
+    }
+
+    // Backward segment adjacent to the rifted cell
+    let backward = 0;
+    r = row - dRow;
+    c = col - dCol;
+    while (inBounds(r, c) && board.cells[toIndex(r, c)] === scoredBy) {
+      backward++;
+      r -= dRow;
+      c -= dCol;
+    }
+
+    if (forward === 5) {
+      const startIdx = toIndex(row + dRow, col + dCol);
+      const key = dir * BOARD_CELLS + startIdx;
+      if (addUniqueLineKey(lineKeys, key)) {
+        markLineForClear(stamp, toClear, startIdx, dRow, dCol);
+      }
+    }
+
+    if (backward === 5) {
+      const startIdx = toIndex(row - 5 * dRow, col - 5 * dCol);
+      const key = dir * BOARD_CELLS + startIdx;
+      if (addUniqueLineKey(lineKeys, key)) {
+        markLineForClear(stamp, toClear, startIdx, dRow, dCol);
+      }
+    }
+  }
+
+  if (lineKeys.length === 0) {
+    return { scoredBy: null, points: 0, cleared: null };
+  }
+
+  for (const idx of toClear) {
+    removeStone(board, idx);
+  }
+
+  return { scoredBy, points: lineKeys.length, cleared: toClear };
+}
+
 /**
  * Determine if the just-applied move ended the game, returning the winner color.
  *

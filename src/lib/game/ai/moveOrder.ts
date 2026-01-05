@@ -6,6 +6,7 @@
 import { CONFIG } from './constants';
 import type { Board, Color, Move, ScoredMove } from './types';
 import { generateAllMoves } from './moveGen';
+import type { MatchContext } from './moveGen';
 import { decodeMove, encodeMove, MOVE_CODE_NONE } from './moveCodec';
 
 /**
@@ -254,10 +255,11 @@ export function orderMoves(
   player: Color,
   depth: number,
   ttBestMove: Move | null,
-  prevMove: Move | null = null
+  prevMove: Move | null = null,
+  match?: MatchContext
 ): ScoredMove[] {
   // Generate all candidate moves with their base scores
-  const moves = generateAllMoves(board, player);
+  const moves = generateAllMoves(board, player, match);
 
   const ttCode = ttBestMove ? encodeMove(ttBestMove) : MOVE_CODE_NONE;
   const prevCode = prevMove ? encodeMove(prevMove) : MOVE_CODE_NONE;

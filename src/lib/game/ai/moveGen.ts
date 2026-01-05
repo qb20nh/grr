@@ -5,12 +5,18 @@
 
 import { BOARD_SIZE, BOARD_CELLS, CONFIG } from './constants';
 import type { Board, CellIndex, Color, Move, ScoredMove, ReinforceMove, RiftMove } from './types';
-import { EMPTY } from './types';
-import { getOpponent, createReinforceMove, createSingleWinMove, createRiftMove, toIndex, inBounds } from './utils';
+import { EMPTY, BLACK, WHITE } from './types';
+import { getOpponent, createReinforceMove, createSingleWinMove, createRiftMove, isSingleWinMove, toIndex, inBounds } from './utils';
 import { isValidPlacement, checkColinearityConstraint, validateReinforce } from './board';
 import { evaluateSinglePosition, evaluateReinforceMove } from './synergy';
 import { evaluateRiftTarget, findWinningPositions, findWinningPositionsAssumingKoClears, getBlockingMask, riftBreaksThreat } from './threats';
 import type { BlockingMask } from './threats';
+
+export interface MatchContext {
+  scores: { black: number; white: number };
+  /** 0 means “unlimited” (play until exhaustion). */
+  scoreToWin: number;
+}
 
 // Precomputed neighbor lists (radius = CONFIG.CANDIDATE_RADIUS) for fast candidate generation.
 const NEIGHBORS: readonly CellIndex[][] = (() => {
@@ -45,6 +51,17 @@ function nextCandidateStamp(): number {
     candidateStamp = 1;
   }
   return candidateStamp;
+}
+
+const SINGLE_SEEN = new Uint32Array(BOARD_CELLS);
+let singleStamp = 1;
+function nextSingleStamp(): number {
+  singleStamp = (singleStamp + 1) >>> 0;
+  if (singleStamp === 0) {
+    SINGLE_SEEN.fill(0);
+    singleStamp = 1;
+  }
+  return singleStamp;
 }
 
 const PAIR_SEEN = new Uint32Array(BOARD_CELLS * BOARD_CELLS);
@@ -142,9 +159,17 @@ export function scoreCandidates(
  */
 export function generateReinforceMoves(
   board: Board,
-  player: Color
+  player: Color,
+  match?: MatchContext
 ): ScoredMove[] {
   const opponent = getOpponent(player);
+  const scores = match?.scores ?? { black: 0, white: 0 };
+  const scoreToWin = match?.scoreToWin ?? 1;
+  const playerScore = player === BLACK ? scores.black : scores.white;
+  const opponentScore = opponent === BLACK ? scores.black : scores.white;
+  const playerOnMatchPoint = scoreToWin !== 0 && playerScore + 1 >= scoreToWin;
+  const opponentOnMatchPoint = scoreToWin !== 0 && opponentScore + 1 >= scoreToWin;
+
   const blocking = getBlockingMask(board, player, false);
 
   // Materialize blocking positions once (used for must-block and bonuses).
@@ -161,25 +186,44 @@ export function generateReinforceMoves(
   
   const moves: ScoredMove[] = [];
   
-  // Check for single-stone winning moves first (highest priority)
-  const winningPositions = findWinningPositions(board, player);
-  if (winningPositions.length > 0) {
-    // Single stone win is the best possible move
-    const winPos = winningPositions[0];
-    moves.push({
-      move: createSingleWinMove(winPos),
-      score: CONFIG.INFINITY,
-      orderScore: CONFIG.INFINITY,
-    });
-    // Return immediately - no need to search further
-    return moves;
+  // Single-stone scoring moves (legal only when they score).
+  const scoringPositions = findWinningPositions(board, player);
+  if (scoringPositions.length > 0) {
+    // If scoring ends the match, we can treat it as an immediate win (root will terminate).
+    if (playerOnMatchPoint) {
+      const winPos = scoringPositions[0];
+      return [
+        {
+          move: createSingleWinMove(winPos),
+          score: CONFIG.INFINITY,
+          orderScore: CONFIG.INFINITY,
+        },
+      ];
+    }
+
+    // Otherwise, include a few scoring singles as high-value candidates (ordering only).
+    // Keep this conservative: search should decide whether “taking a point” is worth it.
+    const SCORE_BONUS = 120000;
+    const scoredSingles = scoringPositions.map(pos => ({
+      pos,
+      score: evaluateSinglePosition(board, pos, player, blocking) + SCORE_BONUS,
+    }));
+    scoredSingles.sort((a, b) => b.score - a.score);
+    const topSingles = scoredSingles.slice(0, 6);
+    for (const s of topSingles) {
+      moves.push({
+        move: createSingleWinMove(s.pos),
+        score: s.score,
+        orderScore: s.score,
+      });
+    }
   }
   
-  // CRITICAL: Check if opponent can win next move
+  // CRITICAL: Check if opponent can end the match on their next move (match point).
   // Ko only blocks placement until the next move. Since we are about to move now,
   // treat Ko as available when asking “can the opponent win on their next move?”.
   const opponentWinPositions = findWinningPositionsAssumingKoClears(board, opponent);
-  const mustBlock = opponentWinPositions.length > 0;
+  const mustBlock = opponentOnMatchPoint && opponentWinPositions.length > 0;
   
   // If opponent can win next turn, blocking is MANDATORY
   // Blocking positions should include the opponent's winning squares
@@ -262,11 +306,21 @@ export function generateReinforceMoves(
   moves.sort((a, b) => b.score - a.score);
   
   // Remove duplicates (same pair in different order) using a numeric mask.
+  // Also dedup single-stone scoring moves by position.
   const stamp = nextPairStamp();
+  const single = nextSingleStamp();
   const uniqueMoves: ScoredMove[] = [];
   
   for (const m of moves) {
-    const rm = m.move as ReinforceMove;
+    const mv = m.move;
+    if (isSingleWinMove(mv)) {
+      if (SINGLE_SEEN[mv.pos1] === single) continue;
+      SINGLE_SEEN[mv.pos1] = single;
+      uniqueMoves.push(m);
+      continue;
+    }
+
+    const rm = mv as ReinforceMove;
     const key = pairKey(rm.pos1, rm.pos2);
     if (PAIR_SEEN[key] === stamp) continue;
     PAIR_SEEN[key] = stamp;
@@ -281,14 +335,19 @@ export function generateReinforceMoves(
  */
 export function generateRiftMoves(
   board: Board,
-  player: Color
+  player: Color,
+  match?: MatchContext
 ): ScoredMove[] {
   const opponent = getOpponent(player);
+  const scores = match?.scores ?? { black: 0, white: 0 };
+  const scoreToWin = match?.scoreToWin ?? 1;
+  const opponentScore = opponent === BLACK ? scores.black : scores.white;
+  const opponentOnMatchPoint = scoreToWin !== 0 && opponentScore + 1 >= scoreToWin;
   const moves: ScoredMove[] = [];
   
-  // Check if opponent can win next turn - rifting the right stone is critical
+  // If the opponent is on match point, rifting the right stone can be critical defense.
   const opponentWinPositions = findWinningPositionsAssumingKoClears(board, opponent);
-  const opponentCanWin = opponentWinPositions.length > 0;
+  const opponentCanWin = opponentOnMatchPoint && opponentWinPositions.length > 0;
   
   // Find all opponent stones
   for (let i = 0; i < BOARD_CELLS; i++) {
@@ -327,10 +386,11 @@ export function generateRiftMoves(
  */
 export function generateAllMoves(
   board: Board,
-  player: Color
+  player: Color,
+  match?: MatchContext
 ): ScoredMove[] {
-  const reinforceMoves = generateReinforceMoves(board, player);
-  const riftMoves = generateRiftMoves(board, player);
+  const reinforceMoves = generateReinforceMoves(board, player, match);
+  const riftMoves = generateRiftMoves(board, player, match);
 
   // Merge two already-sorted lists (avoid an extra O(n log n) sort in the hot path).
   const out: ScoredMove[] = new Array(reinforceMoves.length + riftMoves.length);
@@ -361,20 +421,20 @@ export function generateAllMoves(
  */
 export function generateTacticalMoves(
   board: Board,
-  player: Color
+  player: Color,
+  match?: MatchContext
 ): ScoredMove[] {
   const opponent = getOpponent(player);
+  const scores = match?.scores ?? { black: 0, white: 0 };
+  const scoreToWin = match?.scoreToWin ?? 1;
+  const playerScore = player === BLACK ? scores.black : scores.white;
+  const playerOnMatchPoint = scoreToWin !== 0 && playerScore + 1 >= scoreToWin;
   
-  // 1. Winning moves
+  // 1. Match-ending scoring moves
   const winningPositions = findWinningPositions(board, player);
-  if (winningPositions.length > 0) {
-    // Immediate single-stone win is the best tactical move; no need to consider others.
-    return [
-      {
-        move: createSingleWinMove(winningPositions[0]),
-        score: CONFIG.INFINITY,
-      },
-    ];
+  if (playerOnMatchPoint && winningPositions.length > 0) {
+    // Scoring ends the match; no need to consider others.
+    return [{ move: createSingleWinMove(winningPositions[0]), score: CONFIG.INFINITY }];
   }
 
   // 2) Threat-driven tactical move set (for quiescence):
@@ -397,20 +457,19 @@ export function generateTacticalMoves(
   const tactical: ScoredMove[] = [];
 
   // Reinforce candidates are already bounded to CONFIG.MAX_PAIRS and ordered by heuristic score.
-  const reinforceMoves = generateReinforceMoves(board, player);
+  const reinforceMoves = generateReinforceMoves(board, player, match);
   for (const m of reinforceMoves) {
     const mv = m.move;
     if (mv.action !== 'reinforce') continue;
 
-    // Single-stone wins were handled above.
     const p1 = mv.pos1;
-    const p2 = (mv as ReinforceMove).pos2;
+    const p2 = isSingleWinMove(mv) ? null : (mv as ReinforceMove).pos2;
 
-    if (isDirectWinBlock(p1) || isDirectWinBlock(p2)) {
+    if (isDirectWinBlock(p1) || (p2 !== null && isDirectWinBlock(p2))) {
       tactical.push(m);
       continue;
     }
-    if (isBlockingSquare(p1) || isBlockingSquare(p2)) {
+    if (isBlockingSquare(p1) || (p2 !== null && isBlockingSquare(p2))) {
       tactical.push(m);
       continue;
     }
@@ -421,7 +480,7 @@ export function generateTacticalMoves(
   }
 
   // Rift candidates (bounded to CONFIG.MAX_RIFTS).
-  const riftMoves = generateRiftMoves(board, player);
+  const riftMoves = generateRiftMoves(board, player, match);
   for (const rm of riftMoves) {
     const rpos = (rm.move as RiftMove).pos;
     if (rm.score >= 50000 || riftBreaksThreat(board, rpos, player)) {
@@ -431,7 +490,7 @@ export function generateTacticalMoves(
 
   // Safety: if our threat-driven filter yields nothing, fall back to a small top slice.
   if (tactical.length === 0) {
-    return generateAllMoves(board, player).slice(0, 20);
+    return generateAllMoves(board, player, match).slice(0, 20);
   }
 
   tactical.sort((a, b) => b.score - a.score);
@@ -444,7 +503,8 @@ export function generateTacticalMoves(
  */
 export function generateBlockingMoves(
   board: Board,
-  player: Color
+  player: Color,
+  match?: MatchContext
 ): ScoredMove[] {
   const opponent = getOpponent(player);
   const moves: ScoredMove[] = [];
@@ -503,7 +563,7 @@ export function generateBlockingMoves(
   }
   
   // Also consider rifting the threat (rift moves already have proper scoring)
-  const riftMoves = generateRiftMoves(board, player);
+  const riftMoves = generateRiftMoves(board, player, match);
   for (const rm of riftMoves) {
     if (rm.score > 200000) { // Rift that breaks a major threat
       moves.push(rm);

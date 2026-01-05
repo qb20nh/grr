@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import { pendingPlacements, pendingRift, canConfirmMove, aiThinking, isAiTurn, winner, gameStore } from '$lib/stores/gameStore';
   import { gameEngine } from '$lib/game/engine';
 
@@ -36,6 +37,78 @@
     const ai = $gameStore.aiColor;
     if (!ai) return null;
     return ai === 'black' ? 'white' : 'black';
+  });
+
+  const AI_HARD_CAP_MS = 5000;
+  const AI_ULTRA_TIME_MS = 60000;
+  const AI_MIN_TIME_MS = 100;
+
+  function normalizeAiBudgetMs(requested: unknown): number {
+    if (requested === 0) return AI_ULTRA_TIME_MS;
+    if (typeof requested !== 'number') return AI_HARD_CAP_MS;
+    if (!Number.isFinite(requested) || requested < 0) return AI_HARD_CAP_MS;
+    return Math.max(AI_MIN_TIME_MS, Math.min(AI_HARD_CAP_MS, Math.round(requested)));
+  }
+
+  function formatCountdown(msLeft: number): string {
+    const totalSec = Math.max(0, Math.floor((msLeft + 999) / 1000));
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return `(${m}:${String(s).padStart(2, '0')})`;
+  }
+
+  let aiThinkStartedMs = $state<number | null>(null);
+  let aiNowMs = $state<number>(Date.now());
+  let aiTickInterval: number | null = null;
+
+  $effect(() => {
+    if (typeof window === 'undefined') return;
+
+    if ($aiThinking) {
+      if (aiThinkStartedMs === null) {
+        aiThinkStartedMs = Date.now();
+        aiNowMs = aiThinkStartedMs;
+      }
+      if (aiTickInterval === null) {
+        aiTickInterval = window.setInterval(() => {
+          aiNowMs = Date.now();
+        }, 100);
+      }
+    } else {
+      aiThinkStartedMs = null;
+      if (aiTickInterval !== null) {
+        window.clearInterval(aiTickInterval);
+        aiTickInterval = null;
+      }
+    }
+  });
+
+  onDestroy(() => {
+    if (typeof window === 'undefined') return;
+    if (aiTickInterval !== null) {
+      window.clearInterval(aiTickInterval);
+      aiTickInterval = null;
+    }
+  });
+
+  let aiBudgetMs = $derived.by(() => {
+    if (!$aiThinking) return null;
+    const state = $gameStore;
+    if (state.gameMode === 'vs-ai') return normalizeAiBudgetMs(state.vsAiMaxTimeMs);
+    if (state.gameMode === 'ai-vs-ai') {
+      const requested = state.currentPlayer === 'black' ? state.spectateMaxTimeMsBlack : state.spectateMaxTimeMsWhite;
+      return normalizeAiBudgetMs(requested);
+    }
+    return null;
+  });
+
+  let aiTimeLeftText = $derived.by(() => {
+    if (!$aiThinking) return '';
+    if (aiThinkStartedMs === null) return '';
+    if (aiBudgetMs === null) return '';
+    const elapsed = Math.max(0, aiNowMs - aiThinkStartedMs);
+    const left = Math.max(0, aiBudgetMs - elapsed);
+    return formatCountdown(left);
   });
 
   let resultDetail = $derived.by(() => {
@@ -79,7 +152,7 @@
 
   let idleText = $derived.by(() => {
     if ($gameStore.gameMode === 'ai-vs-ai') return 'Spectating (AI vs AI)';
-    if ($aiThinking) return 'AI thinking...';
+    if ($aiThinking) return aiTimeLeftText ? `AI thinking... ${aiTimeLeftText}` : 'AI thinking...';
     if ($isAiTurn) return 'Opponent\'s turn';
     return 'Your turn';
   });

@@ -13,7 +13,7 @@ export const load = () => {
   if (browser && !isLocalhost(window.location.hostname)) {
     // On GitHub Pages (static), the only way to show the host's 404 page is to navigate
     // to a URL that doesn't exist (server-side 404). Do a full reload.
-    window.location.replace(resolve('/__404__'));
+    window.location.replace(resolve('/') + '__404__');
     return {};
   }
 

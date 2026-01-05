@@ -4,9 +4,10 @@
  */
 
 import { CONFIG, BOARD_CELLS } from './constants';
-import type { Board, Color, Move, SearchResult, ScoredMove, UndoInfo } from './types';
+import type { Board, CellIndex, Color, Move, SearchResult, ScoredMove, UndoInfo } from './types';
+import { BLACK, WHITE, EMPTY } from './types';
 import { getOpponent, moveToKey, movesEqual, createReinforceMove, createSingleWinMove, createRiftMove } from './utils';
-import { makeMove, unmakeMove, getWinnerAfterMove, validateReinforce, validateRift, getEmptyPositions } from './board';
+import { applyScoringAndClear, makeMove, unmakeMove, getWinnerAfterMove, validateReinforce, validateRift, getEmptyPositions } from './board';
 import { evaluateSearch, isQuietPosition } from './evaluate';
 import { generateAllMoves, generateTacticalMoves } from './moveGen';
 import { orderMoves, updateKillerMoves, updateHistory, updateCounterMove, updateContinuationHistory, clearMoveOrdering, PVTable, isInterestingMove, getLMRReduction, getFutilityMargin } from './moveOrder';
@@ -38,6 +39,15 @@ interface SearchContext {
   board: Board;
   nnue: NnueState | null;
   /**
+   * Match score state (points). Mutated by `applyMove`/`revertMove`.
+   */
+  scoreBlack: number;
+  scoreWhite: number;
+  /**
+   * Score target (0 = unlimited / play until exhaustion).
+   */
+  scoreToWin: number;
+  /**
    * Optional root ordering hint (e.g. from TSS defense refutation). This should
    * NOT short-circuit search; it only influences move ordering at ply 0.
    */
@@ -68,6 +78,80 @@ interface SearchContext {
    * Optional salt applied to the TT key at ply 2 only (when `ply2MoveFilter` is active).
    */
   ply2TTSalt: bigint;
+}
+
+type SearchUndoInfo = UndoInfo & {
+  scoredBy: Color | null;
+  scoreDelta: number;
+  cleared: CellIndex[] | null;
+};
+
+function restoreClearedStones(board: Board, cleared: CellIndex[], color: Color): void {
+  for (const idx of cleared) {
+    if (board.cells[idx] !== EMPTY) continue;
+    board.cells[idx] = color;
+    if (color === BLACK) board.blackCount++;
+    else if (color === WHITE) board.whiteCount++;
+  }
+}
+
+function getMatchWinnerFromScores(scoreBlack: number, scoreWhite: number, scoreToWin: number): Color | null {
+  if (!Number.isFinite(scoreToWin) || scoreToWin <= 0) return null; // 0 = unlimited
+  if (scoreBlack >= scoreToWin) return BLACK;
+  if (scoreWhite >= scoreToWin) return WHITE;
+  return null;
+}
+
+function getMatchWinner(ctx: SearchContext): Color | null {
+  return getMatchWinnerFromScores(ctx.scoreBlack, ctx.scoreWhite, ctx.scoreToWin);
+}
+
+function scoreForMatchWinner(winner: Color, perspective: Color, winPly: number): number {
+  // Use child-ply so earlier wins are preferred.
+  return winner === perspective ? (CONFIG.WIN_SCORE - winPly) : (CONFIG.LOSS_SCORE + winPly);
+}
+
+const MASK_64 = (1n << 64n) - 1n;
+const SCORE_HASH_K0 = 0x9e3779b97f4a7c15n;
+const SCORE_HASH_M1 = 0xbf58476d1ce4e5b9n;
+const SCORE_HASH_M2 = 0x94d049bb133111ebn;
+
+function u32(n: number): bigint {
+  return BigInt(n >>> 0);
+}
+
+function mix64(z: bigint): bigint {
+  z &= MASK_64;
+  z ^= z >> 30n;
+  z = (z * SCORE_HASH_M1) & MASK_64;
+  z ^= z >> 27n;
+  z = (z * SCORE_HASH_M2) & MASK_64;
+  z ^= z >> 31n;
+  return z & MASK_64;
+}
+
+function matchScoreHash(scoreBlack: number, scoreWhite: number, scoreToWin: number): bigint {
+  // Include match state in the TT key to prevent transpositions across different scores.
+  // We intentionally keep this 64-bit so it composes with the 64-bit Zobrist hash.
+  const packed = (u32(scoreBlack) | (u32(scoreWhite) << 32n)) ^ (u32(scoreToWin) * SCORE_HASH_K0);
+  return mix64(packed);
+}
+
+function pointValue(scoreToWin: number): number {
+  // Conservative scaling: points matter, but don't swamp all tactical/positional factors.
+  if (!Number.isFinite(scoreToWin) || scoreToWin <= 0) return 0;
+  return Math.floor(CONFIG.WIN_SCORE / (Math.max(1, scoreToWin) * 4));
+}
+
+function evaluateWithMatch(ctx: SearchContext, player: Color): number {
+  const base = evaluateSearch(ctx.board, player, ctx.nnue);
+  if (ctx.scoreToWin === 0) return base;
+  const pv = pointValue(ctx.scoreToWin);
+  if (pv === 0) return base;
+
+  // Convert (blackScore - whiteScore) into player-perspective.
+  const diff = player === BLACK ? (ctx.scoreBlack - ctx.scoreWhite) : (ctx.scoreWhite - ctx.scoreBlack);
+  return base + diff * pv;
 }
 
 function filterRootMoves(
@@ -123,21 +207,42 @@ function generateFallbackRootMoves(
 function getRootMoves(
   board: Board,
   player: Color,
-  rootMoveFilter: ((m: Move) => boolean) | null
+  rootMoveFilter: ((m: Move) => boolean) | null,
+  match?: { scores: { black: number; white: number }; scoreToWin: number }
 ): ScoredMove[] {
-  const moves = filterRootMoves(generateAllMoves(board, player), rootMoveFilter);
+  const moves = filterRootMoves(generateAllMoves(board, player, match), rootMoveFilter);
   if (moves.length > 0) return moves;
   if (!rootMoveFilter) return moves;
   return generateFallbackRootMoves(board, player, rootMoveFilter);
 }
 
-function applyMove(ctx: SearchContext, move: Move, player: Color): UndoInfo {
-  const undo = makeMove(ctx.board, move, player);
+function applyMove(ctx: SearchContext, move: Move, player: Color): SearchUndoInfo {
+  const undo = makeMove(ctx.board, move, player) as SearchUndoInfo;
   ctx.nnue?.applyMove(move, player, undo);
+
+  const scoring = applyScoringAndClear(ctx.board, move, player);
+  undo.scoredBy = scoring.scoredBy;
+  undo.scoreDelta = scoring.points;
+  undo.cleared = scoring.cleared;
+
+  if (scoring.scoredBy !== null && scoring.points > 0) {
+    if (scoring.scoredBy === BLACK) ctx.scoreBlack += scoring.points;
+    else if (scoring.scoredBy === WHITE) ctx.scoreWhite += scoring.points;
+  }
+
   return undo;
 }
 
-function revertMove(ctx: SearchContext, undo: UndoInfo, player: Color): void {
+function revertMove(ctx: SearchContext, undo: SearchUndoInfo, player: Color): void {
+  // Restore cleared stones BEFORE unmaking the base move so counts end up consistent.
+  if (undo.scoredBy !== null && undo.scoreDelta > 0) {
+    if (undo.scoredBy === BLACK) ctx.scoreBlack -= undo.scoreDelta;
+    else if (undo.scoredBy === WHITE) ctx.scoreWhite -= undo.scoreDelta;
+    if (undo.cleared) {
+      restoreClearedStones(ctx.board, undo.cleared, undo.scoredBy);
+    }
+  }
+
   ctx.nnue?.unapplyMove(undo.move, player, undo);
   unmakeMove(ctx.board, undo, player);
 }
@@ -158,7 +263,7 @@ function rescoreTopMovesWithNnue(
   for (let i = 0; i < K; i++) {
     const m = moves[i];
     const undo = applyMove(ctx, m.move, player);
-    const childScore = evaluateSearch(ctx.board, opponent, ctx.nnue); // opponent-perspective
+    const childScore = evaluateWithMatch(ctx, opponent); // opponent-perspective
     revertMove(ctx, undo, player);
     // move value from current player perspective
     rescored.push({ m, order: -childScore, idx: i });
@@ -190,7 +295,8 @@ function quiescence(
   player: Color,
   alpha: number,
   beta: number,
-  depth: number
+  depth: number,
+  ply: number
 ): number {
   nodesSearched++;
   
@@ -198,9 +304,14 @@ function quiescence(
     searchAborted = true;
     return 0;
   }
+
+  const winnerNow = getMatchWinner(ctx);
+  if (winnerNow !== null) {
+    return scoreForMatchWinner(winnerNow, player, ply);
+  }
   
   // Stand-pat evaluation
-  const standPat = evaluateSearch(ctx.board, player, ctx.nnue);
+  const standPat = evaluateWithMatch(ctx, player);
   
   if (depth <= 0) {
     return standPat;
@@ -223,7 +334,10 @@ function quiescence(
   }
   
   // Generate only tactical moves
-  const tacticalMoves = generateTacticalMoves(ctx.board, player);
+  const tacticalMoves = generateTacticalMoves(ctx.board, player, {
+    scores: { black: ctx.scoreBlack, white: ctx.scoreWhite },
+    scoreToWin: ctx.scoreToWin,
+  });
   
   for (const { move, score } of tacticalMoves) {
     // Delta pruning - skip moves that can't possibly improve alpha
@@ -232,7 +346,11 @@ function quiescence(
     }
     
     const undoInfo = applyMove(ctx, move, player);
-    const evalScore = -quiescence(ctx, getOpponent(player), -beta, -localAlpha, depth - 1);
+    const winner = getMatchWinner(ctx);
+    const evalScore =
+      winner !== null
+        ? scoreForMatchWinner(winner, player, ply + 1)
+        : -quiescence(ctx, getOpponent(player), -beta, -localAlpha, depth - 1, ply + 1);
     revertMove(ctx, undoInfo, player);
     
     if (searchAborted) return 0;
@@ -273,7 +391,9 @@ function alphaBeta(
   }
   
   // Transposition table probe
-  const baseKey = withTurn(ctx.board.hash, player);
+  const baseKey =
+    withTurn(ctx.board.hash, player) ^
+    matchScoreHash(ctx.scoreBlack, ctx.scoreWhite, ctx.scoreToWin);
   const ttKey =
     ply === 0 && ctx.rootTTSalt !== 0n
       ? (baseKey ^ ctx.rootTTSalt)
@@ -289,7 +409,7 @@ function alphaBeta(
   
   // Depth limit - enter quiescence
   if (depth <= 0) {
-    const qScore = quiescence(ctx, player, alpha, beta, CONFIG.QUIESCENCE_DEPTH);
+    const qScore = quiescence(ctx, player, alpha, beta, CONFIG.QUIESCENCE_DEPTH, ply);
     return { completed: !searchAborted, score: qScore, move: null };
   }
 
@@ -318,11 +438,11 @@ function alphaBeta(
     depth <= 2 &&
     beta < CONFIG.WIN_SCORE - 1000
   ) {
-    const staticEval = evaluateSearch(ctx.board, player, ctx.nnue);
+    const staticEval = evaluateWithMatch(ctx, player);
     const razorMargin = depth === 1 ? 500 : 900;
     if (staticEval + razorMargin <= alpha) {
       if (isPruningSafe() && isQuietPosition(ctx.board, player)) {
-        const qScore = quiescence(ctx, player, alpha, beta, CONFIG.QUIESCENCE_DEPTH);
+        const qScore = quiescence(ctx, player, alpha, beta, CONFIG.QUIESCENCE_DEPTH, ply);
         return { completed: !searchAborted, score: qScore, move: null };
       }
     }
@@ -343,7 +463,7 @@ function alphaBeta(
     depth >= CONFIG.NMP_MIN_DEPTH &&
     beta < CONFIG.WIN_SCORE - 1000 // don't prune in (near-)mate windows
   ) {
-    const staticEval = evaluateSearch(ctx.board, player, ctx.nnue);
+    const staticEval = evaluateWithMatch(ctx, player);
     if (staticEval >= beta) {
       // Tactical guard: don't allow NMP when we may need an immediate defense.
       if (isPruningSafe()) {
@@ -378,7 +498,10 @@ function alphaBeta(
   // Generate and order moves
   const underCriticalThreat = rootUnderCriticalThreat;
   const orderingHint = ply === 0 && ctx.rootMoveHint ? ctx.rootMoveHint : ttBestMove;
-  let moves = orderMoves(ctx.board, player, ply, orderingHint, prevMove);
+  let moves = orderMoves(ctx.board, player, ply, orderingHint, prevMove, {
+    scores: { black: ctx.scoreBlack, white: ctx.scoreWhite },
+    scoreToWin: ctx.scoreToWin,
+  });
 
   // Root-only move filtering (e.g. opening constraints).
   if (ply === 0 && ctx.rootMoveFilter) {
@@ -420,7 +543,7 @@ function alphaBeta(
   
   if (moves.length === 0) {
     // No legal moves (shouldn't happen in Gomoku)
-    return { completed: true, score: evaluateSearch(ctx.board, player, ctx.nnue), move: null };
+    return { completed: true, score: evaluateWithMatch(ctx, player), move: null };
   }
   
   let bestMove: Move | null = null;
@@ -466,12 +589,10 @@ function alphaBeta(
     
     let score: number;
 
-    // Incremental terminal check based on the move we just made.
-    // This replaces expensive full-board `hasWon` scans at every node.
-    const winner = getWinnerAfterMove(ctx.board, move, player);
+    // Terminal check: match ends when a side reaches `scoreToWin` points.
+    const winner = getMatchWinner(ctx);
     if (winner !== null) {
-      // Use child-ply (ply + 1) so earlier wins are preferred.
-      score = winner === player ? (CONFIG.WIN_SCORE - (ply + 1)) : (CONFIG.LOSS_SCORE + (ply + 1));
+      score = scoreForMatchWinner(winner, player, ply + 1);
       revertMove(ctx, undoInfo, player);
       searchedMoves++;
     } else {
@@ -616,7 +737,9 @@ export function alphaBetaWindowed(
   prevMove: Move | null = null,
   rootMoveFilter: ((m: Move) => boolean) | null = null,
   ply1MoveFilter: ((m: Move) => boolean) | null = null,
-  ply2MoveFilter: ((m: Move) => boolean) | null = null
+  ply2MoveFilter: ((m: Move) => boolean) | null = null,
+  scores: { black: number; white: number } = { black: 0, white: 0 },
+  scoreToWin: number = 1
 ): SearchResult {
   // Initialize search state for this call.
   searchStartTime = Date.now();
@@ -628,6 +751,9 @@ export function alphaBetaWindowed(
   const ctx: SearchContext = {
     board,
     nnue,
+    scoreBlack: scores.black,
+    scoreWhite: scores.white,
+    scoreToWin,
     rootMoveHint: null,
     rootMoveFilter,
     rootTTSalt: rootMoveFilter ? ROOT_FILTER_TT_SALT : 0n,
@@ -699,6 +825,14 @@ export function iterativeDeepening(
      * Optional ply-2 move filter. Applied ONLY at ply 2.
      */
     ply2MoveFilter?: (m: Move) => boolean;
+    /**
+     * Match score state (points). Defaults to 0-0.
+     */
+    scores?: { black: number; white: number };
+    /**
+     * Score target (0 = unlimited). Defaults to 1.
+     */
+    scoreToWin?: number;
   }
 ): SearchResult {
   // Initialize search state
@@ -731,6 +865,9 @@ export function iterativeDeepening(
   const ctx: SearchContext = {
     board,
     nnue,
+    scoreBlack: options?.scores?.black ?? 0,
+    scoreWhite: options?.scores?.white ?? 0,
+    scoreToWin: options?.scoreToWin ?? 1,
     rootMoveHint: options?.rootMoveHint ?? null,
     rootMoveFilter,
     rootTTSalt: rootMoveFilter ? ROOT_FILTER_TT_SALT : 0n,
@@ -742,7 +879,10 @@ export function iterativeDeepening(
   
   // CRITICAL: Always have a valid move before starting search
   // This guarantees we never return null
-  const allMoves = getRootMoves(board, player, ctx.rootMoveFilter);
+  const allMoves = getRootMoves(board, player, ctx.rootMoveFilter, {
+    scores: { black: ctx.scoreBlack, white: ctx.scoreWhite },
+    scoreToWin: ctx.scoreToWin,
+  });
   let bestMoveSoFar: Move | null = allMoves.length > 0 ? allMoves[0].move : null;
   let bestScoreSoFar = allMoves.length > 0 ? allMoves[0].score : 0;
   let bestDepthSoFar = 0;
@@ -864,7 +1004,9 @@ export interface SearchSession {
     player: Color,
     rootMoveFilter?: ((m: Move) => boolean) | null,
     ply1MoveFilter?: ((m: Move) => boolean) | null,
-    ply2MoveFilter?: ((m: Move) => boolean) | null
+    ply2MoveFilter?: ((m: Move) => boolean) | null,
+    scores?: { black: number; white: number },
+    scoreToWin?: number
   ): void;
   /**
    * Get the best result found so far without searching.
@@ -880,6 +1022,9 @@ class SearchSessionImpl implements SearchSession {
   private pvTable: PVTable;
   private nnueWeights: NnueWeights | null;
   private nnue: NnueState | null = null;
+  private scoreBlack: number;
+  private scoreWhite: number;
+  private scoreToWin: number;
   private rootMoveFilter: ((m: Move) => boolean) | null;
   private ply1MoveFilter: ((m: Move) => boolean) | null;
   private ply2MoveFilter: ((m: Move) => boolean) | null;
@@ -898,7 +1043,9 @@ class SearchSessionImpl implements SearchSession {
     nnueWeights: NnueWeights | null,
     rootMoveFilter: ((m: Move) => boolean) | null,
     ply1MoveFilter: ((m: Move) => boolean) | null,
-    ply2MoveFilter: ((m: Move) => boolean) | null
+    ply2MoveFilter: ((m: Move) => boolean) | null,
+    scores: { black: number; white: number },
+    scoreToWin: number
   ) {
     this.board = board;
     this.player = player;
@@ -906,6 +1053,9 @@ class SearchSessionImpl implements SearchSession {
     this.tt = tt;
     this.pvTable = new PVTable();
     this.nnueWeights = nnueWeights;
+    this.scoreBlack = scores.black;
+    this.scoreWhite = scores.white;
+    this.scoreToWin = scoreToWin;
     this.rootMoveFilter = rootMoveFilter;
     this.ply1MoveFilter = ply1MoveFilter;
     this.ply2MoveFilter = ply2MoveFilter;
@@ -920,7 +1070,10 @@ class SearchSessionImpl implements SearchSession {
     this.nnue = this.nnueWeights ? NnueState.fromBoard(this.board, this.nnueWeights) : null;
 
     // Seed "best move so far" to guarantee non-null result.
-    const moves = getRootMoves(this.board, this.player, this.rootMoveFilter);
+    const moves = getRootMoves(this.board, this.player, this.rootMoveFilter, {
+      scores: { black: this.scoreBlack, white: this.scoreWhite },
+      scoreToWin: this.scoreToWin,
+    });
     this.bestMove = moves.length > 0 ? moves[0].move : null;
     this.bestScore = moves.length > 0 ? moves[0].score : 0;
     this.bestDepth = 0;
@@ -933,13 +1086,22 @@ class SearchSessionImpl implements SearchSession {
     player: Color,
     rootMoveFilter?: ((m: Move) => boolean) | null,
     ply1MoveFilter?: ((m: Move) => boolean) | null,
-    ply2MoveFilter?: ((m: Move) => boolean) | null
+    ply2MoveFilter?: ((m: Move) => boolean) | null,
+    scores?: { black: number; white: number },
+    scoreToWin?: number
   ): void {
     this.board = board;
     this.player = player;
     if (rootMoveFilter !== undefined) this.rootMoveFilter = rootMoveFilter;
     if (ply1MoveFilter !== undefined) this.ply1MoveFilter = ply1MoveFilter;
     if (ply2MoveFilter !== undefined) this.ply2MoveFilter = ply2MoveFilter;
+    if (scores !== undefined) {
+      this.scoreBlack = scores.black;
+      this.scoreWhite = scores.white;
+    }
+    if (scoreToWin !== undefined) {
+      this.scoreToWin = scoreToWin;
+    }
     this.resetForPosition();
   }
 
@@ -980,6 +1142,9 @@ class SearchSessionImpl implements SearchSession {
     const ctx: SearchContext = {
       board: this.board,
       nnue: this.nnue,
+      scoreBlack: this.scoreBlack,
+      scoreWhite: this.scoreWhite,
+      scoreToWin: this.scoreToWin,
       rootMoveHint: null,
       rootMoveFilter: this.rootMoveFilter,
       rootTTSalt: this.rootMoveFilter ? ROOT_FILTER_TT_SALT : 0n,
@@ -1063,9 +1228,11 @@ export function createSearchSession(
   nnueWeights: NnueWeights | null = null,
   rootMoveFilter: ((m: Move) => boolean) | null = null,
   ply1MoveFilter: ((m: Move) => boolean) | null = null,
-  ply2MoveFilter: ((m: Move) => boolean) | null = null
+  ply2MoveFilter: ((m: Move) => boolean) | null = null,
+  scores: { black: number; white: number } = { black: 0, white: 0 },
+  scoreToWin: number = 1
 ): SearchSession {
-  return new SearchSessionImpl(board, player, maxDepth, tt, nnueWeights, rootMoveFilter, ply1MoveFilter, ply2MoveFilter);
+  return new SearchSessionImpl(board, player, maxDepth, tt, nnueWeights, rootMoveFilter, ply1MoveFilter, ply2MoveFilter, scores, scoreToWin);
 }
 
 /**
@@ -1080,13 +1247,15 @@ export function findBestMove(
   nnueWeights: NnueWeights | null = null,
   rootMoveFilter: ((m: Move) => boolean) | null = null,
   ply1MoveFilter: ((m: Move) => boolean) | null = null,
-  ply2MoveFilter: ((m: Move) => boolean) | null = null
+  ply2MoveFilter: ((m: Move) => boolean) | null = null,
+  scores: { black: number; white: number } = { black: 0, white: 0 },
+  scoreToWin: number = 1
 ): SearchResult {
   const startMs = Date.now();
   // Quick check for obvious moves
   
   // 1. Check if we can win immediately
-  const moves = getRootMoves(board, player, rootMoveFilter);
+  const moves = getRootMoves(board, player, rootMoveFilter, { scores, scoreToWin });
   
   // Safety: if no moves, return null (shouldn't happen in normal play)
   if (moves.length === 0) {
@@ -1099,49 +1268,62 @@ export function findBestMove(
     };
   }
   
-  for (const { move } of moves) {
-    const undo = makeMove(board, move, player);
-    const winner = getWinnerAfterMove(board, move, player);
-    unmakeMove(board, undo, player);
+  const opponent = getOpponent(player);
 
-    if (winner === player) {
-      return {
-        completed: true,
-        score: CONFIG.WIN_SCORE,
-        move,
-        depth: 1,
-        nodes: moves.length,
-      };
-    }
-  }
-  
-  function hasImmediateWinningSingleStoneMoveExhaustive(side: Color): boolean {
-    // With the colinearity constraint (two reinforce stones cannot be on the same line
-    // unless an opponent stone lies between them), any reinforce win must be attributable
-    // to a SINGLE winning placement. A “two-stone-only” exact-5 is impossible.
-    //
-    // So we only need an exhaustive single-stone win check (Ko-respecting).
-    const empties = getEmptyPositions(board); // Ko-respecting
+  const quickCtx: SearchContext = {
+    board,
+    nnue: null, // NNUE disabled (handcrafted eval only)
+    scoreBlack: scores.black,
+    scoreWhite: scores.white,
+    scoreToWin,
+    rootMoveHint: null,
+    rootMoveFilter: null,
+    rootTTSalt: 0n,
+    ply1MoveFilter: null,
+    ply1TTSalt: 0n,
+    ply2MoveFilter: null,
+    ply2TTSalt: 0n,
+  };
 
-    // Single-stone wins (legal only when they win).
-    for (const pos of empties) {
-      const mv = createSingleWinMove(pos);
-      const undo = makeMove(board, mv, side);
-      const winner = getWinnerAfterMove(board, mv, side);
-      unmakeMove(board, undo, side);
+  function sideHasImmediateMatchWinningMove(
+    side: Color,
+    filter: ((m: Move) => boolean) | null
+  ): boolean {
+    if (scoreToWin === 0) return false;
+    const candidates = getRootMoves(board, side, filter, {
+      scores: { black: quickCtx.scoreBlack, white: quickCtx.scoreWhite },
+      scoreToWin: quickCtx.scoreToWin,
+    });
+    for (const { move } of candidates) {
+      const undo = applyMove(quickCtx, move, side);
+      const winner = getMatchWinner(quickCtx);
+      revertMove(quickCtx, undo, side);
       if (winner === side) return true;
     }
-
     return false;
   }
 
-  function opponentHasImmediateWinningMove(): boolean {
-    return hasImmediateWinningSingleStoneMoveExhaustive(opponent);
+  // 1. Check if we can end the match immediately.
+  if (scoreToWin !== 0) {
+    for (const { move } of moves) {
+      const undo = applyMove(quickCtx, move, player);
+      const winner = getMatchWinner(quickCtx);
+      revertMove(quickCtx, undo, player);
+
+      if (winner === player) {
+        return {
+          completed: true,
+          score: CONFIG.WIN_SCORE,
+          move,
+          depth: 1,
+          nodes: moves.length,
+        };
+      }
+    }
   }
 
   // 2. Threat Space Search (tactical prover)
   // Spend a slice of the budget trying to PROVE a forced win or find a forced defense.
-  const opponent = getOpponent(player);
 
   // Root sanity: avoid moves that immediately lose (or allow an immediate opponent win),
   // even under very small time budgets where deep search may not complete.
@@ -1155,27 +1337,23 @@ export function findBestMove(
     }
 
     const allowsImmediateLoss = (mv: Move): boolean => {
-      const undo = makeMove(board, mv, player);
-      const immediateWinner = getWinnerAfterMove(board, mv, player);
+      const undo = applyMove(quickCtx, mv, player);
+      const winner = getMatchWinner(quickCtx);
 
-      // If we win immediately, do not second-guess it.
-      if (immediateWinner === player) {
-        unmakeMove(board, undo, player);
-        return false;
-      }
-      // If our move immediately loses (possible for rift due to exact-5 trimming), reject it.
-      if (immediateWinner !== null && immediateWinner !== player) {
-        unmakeMove(board, undo, player);
-        return true;
-      }
-
-      if (hasImmediateWinningSingleStoneMoveExhaustive(opponent)) {
-        unmakeMove(board, undo, player);
-        return true;
+      let loses: boolean;
+      if (winner === player) {
+        // If we end the match immediately, do not second-guess it.
+        loses = false;
+      } else if (winner !== null) {
+        // If our move ends the match for the opponent (e.g. rift gives them points), reject it.
+        loses = true;
+      } else {
+        // Otherwise, only consider immediate *match-ending* threats on the opponent's reply.
+        loses = sideHasImmediateMatchWinningMove(opponent, ply1MoveFilter);
       }
 
-      unmakeMove(board, undo, player);
-      return false;
+      revertMove(quickCtx, undo, player);
+      return loses;
     };
 
     if (!allowsImmediateLoss(result.move)) return result;
@@ -1191,93 +1369,97 @@ export function findBestMove(
     return result;
   }
 
-  const tssBudget =
-    timeLimit > 0
-      ? Math.min(timeLimit, Math.max(150, Math.min(2500, Math.floor(timeLimit * 0.4))))
-      : 2500;
-
   const getRemainingMs = (): number => {
     if (timeLimit <= 0) return 0;
     return timeLimit - (Date.now() - startMs);
   };
 
-  const tssAttack = threatSpaceSearch(board, player, player, {
-    timeLimitMs: Math.floor(tssBudget * 0.6),
-    maxPlies: 10,
-    maxAttackerMoves: 16,
-    maxDefenderMoves: 24,
-  });
-  if (
-    tssAttack.status === 'proven_win' &&
-    tssAttack.move &&
-    (rootMoveFilter === null || rootMoveFilter(tssAttack.move))
-  ) {
-    return sanitizeRootMove({
-      completed: true,
-      score: CONFIG.WIN_SCORE,
-      move: tssAttack.move,
-      depth: 0,
-      nodes: tssAttack.nodes,
-    });
-  }
-  
-  // If we are under tactical threat, try to find a refutation quickly.
-  // IMPORTANT: In Gomoku Rift, two-stone reinforces can create one-move wins even without
-  // classic single-stone win squares (e.g., open-three can be immediate win by placing both ends).
-  // So we also probe whether the opponent has a direct winning move.
-  const underCriticalThreat = hasCriticalThreat(board, opponent);
-  const underImmediateThreat = underCriticalThreat || opponentHasImmediateWinningMove();
-  let rootMoveHint: Move | null = null;
-  let rootMoveHintNodes = 0;
+  // Threat Space Search (tactical prover) only applies to the single-point game.
+  // With score-clearing multi-point rules, TSS assumptions don't hold.
+  if (scoreToWin === 1) {
+    const tssBudget =
+      timeLimit > 0
+        ? Math.min(timeLimit, Math.max(150, Math.min(2500, Math.floor(timeLimit * 0.4))))
+        : 2500;
 
-  if (underImmediateThreat) {
-    const tssDefense = threatSpaceSearch(board, opponent, player, {
-      timeLimitMs: Math.floor(tssBudget * 0.4),
+    const tssAttack = threatSpaceSearch(board, player, player, {
+      timeLimitMs: Math.floor(tssBudget * 0.6),
       maxPlies: 10,
       maxAttackerMoves: 16,
-      maxDefenderMoves: 32,
+      maxDefenderMoves: 24,
     });
-    if (tssDefense.status === 'not_proven' && tssDefense.move) {
-      // Defender found a refutation (within threat-space). Use it only as a root ordering hint,
-      // so alpha-beta can still choose a stronger second stone / continuation.
-      if (rootMoveFilter === null || rootMoveFilter(tssDefense.move)) {
-        rootMoveHint = tssDefense.move;
-        rootMoveHintNodes = tssDefense.nodes;
+    if (
+      tssAttack.status === 'proven_win' &&
+      tssAttack.move &&
+      (rootMoveFilter === null || rootMoveFilter(tssAttack.move))
+    ) {
+      return sanitizeRootMove({
+        completed: true,
+        score: CONFIG.WIN_SCORE,
+        move: tssAttack.move,
+        depth: 0,
+        nodes: tssAttack.nodes,
+      });
+    }
+
+    // If we are under tactical threat, try to find a refutation quickly.
+    // Probe whether the opponent has a direct match-ending move on their next turn.
+    const underCriticalThreat = hasCriticalThreat(board, opponent);
+    const underImmediateThreat = underCriticalThreat || sideHasImmediateMatchWinningMove(opponent, ply1MoveFilter);
+    let rootMoveHint: Move | null = null;
+    let rootMoveHintNodes = 0;
+
+    if (underImmediateThreat) {
+      const tssDefense = threatSpaceSearch(board, opponent, player, {
+        timeLimitMs: Math.floor(tssBudget * 0.4),
+        maxPlies: 10,
+        maxAttackerMoves: 16,
+        maxDefenderMoves: 32,
+      });
+      if (tssDefense.status === 'not_proven' && tssDefense.move) {
+        // Defender found a refutation (within threat-space). Use it only as a root ordering hint,
+        // so alpha-beta can still choose a stronger second stone / continuation.
+        if (rootMoveFilter === null || rootMoveFilter(tssDefense.move)) {
+          rootMoveHint = tssDefense.move;
+          rootMoveHintNodes = tssDefense.nodes;
+        }
+
+        // For ultra-tiny budgets, returning the refutation immediately is still valuable.
+        if (timeLimit <= 200) {
+          return sanitizeRootMove({
+            completed: true,
+            score: 0,
+            move: rootMoveHint ?? moves[0].move,
+            depth: 0,
+            nodes: tssDefense.nodes,
+          });
+        }
       }
 
-      // For ultra-tiny budgets, returning the refutation immediately is still valuable.
-      if (timeLimit <= 200) {
+      // Under threat: use FULL time and depth for defense (with hint ordering if available).
+      const remainingMs = getRemainingMs();
+      if (timeLimit > 0 && remainingMs <= 0) {
         return sanitizeRootMove({
           completed: true,
           score: 0,
           move: rootMoveHint ?? moves[0].move,
           depth: 0,
-          nodes: tssDefense.nodes,
+          nodes: rootMoveHint ? rootMoveHintNodes : 0,
         });
       }
-    }
 
-    // Under threat: use FULL time and depth for defense (with hint ordering if available).
-    const remainingMs = getRemainingMs();
-    if (timeLimit > 0 && remainingMs <= 0) {
-      return sanitizeRootMove({
-        completed: true,
-        score: 0,
-        move: rootMoveHint ?? moves[0].move,
-        depth: 0,
-        nodes: rootMoveHint ? rootMoveHintNodes : 0,
+      const result = iterativeDeepening(board, player, remainingMs, maxDepth, {
+        preserveMoveOrdering: true,
+        nnueWeights,
+        scores,
+        scoreToWin,
+        rootMoveHint,
+        rootMoveFilter: rootMoveFilter ?? undefined,
+        ply1MoveFilter: ply1MoveFilter ?? undefined,
+        ply2MoveFilter: ply2MoveFilter ?? undefined,
       });
+      return sanitizeRootMove(result);
     }
-
-    const result = iterativeDeepening(board, player, remainingMs, maxDepth, {
-      preserveMoveOrdering: true,
-      nnueWeights,
-      rootMoveHint,
-      rootMoveFilter: rootMoveFilter ?? undefined,
-      ply1MoveFilter: ply1MoveFilter ?? undefined,
-      ply2MoveFilter: ply2MoveFilter ?? undefined,
-    });
-    return sanitizeRootMove(result);
   }
   
   // Full search
@@ -1295,6 +1477,8 @@ export function findBestMove(
   const result = iterativeDeepening(board, player, remainingMs, maxDepth, {
     preserveMoveOrdering: true,
     nnueWeights,
+    scores,
+    scoreToWin,
     rootMoveFilter: rootMoveFilter ?? undefined,
     ply1MoveFilter: ply1MoveFilter ?? undefined,
     ply2MoveFilter: ply2MoveFilter ?? undefined,

@@ -18,7 +18,6 @@ import {
   unmakeMove,
   cloneBoard,
   getOpponent,
-  getWinnerAfterMove,
   validateReinforce,
   validateRift,
   isValidPlacement,
@@ -28,16 +27,16 @@ import {
   createSharedTranspositionTableBacking,
   getTranspositionTable,
   BLACK,
+  EMPTY,
   WHITE,
   CONFIG,
   BOARD_SIZE,
 } from './ai/index';
+import { applyScoringAndClear } from './ai/board';
 import type { Board, Color, Move, Position, UndoInfo } from './ai/types';
 import type { SearchSession } from './ai/search';
 import { runTacticalPuzzles } from './ai/puzzles';
 import { runNpsBenchmark } from './ai/benchmark';
-import type { NnueWeights } from './ai/nnue/weights';
-import { getBundledWeightsUrl, loadNnueWeightsOptional } from './ai/nnue/weights';
 import type { Dihedral } from './ai/dihedral';
 import { randomDihedral, applyInverseDihedralPos, transformLegacyBoard, transformLegacyKo } from './ai/dihedral';
 import type { OpeningPreset } from './types';
@@ -65,6 +64,8 @@ interface WorkerState {
   aiColor: string | null;
   playerToMove?: 'black' | 'white';
   lastRiftedPosition: { row: number; col: number } | null;
+  scores?: { black: number; white: number };
+  scoreToWin?: number;
   openingPreset?: OpeningPreset;
   moveIndex?: number;
 }
@@ -119,6 +120,11 @@ interface PositionUpdateRequest {
 
 interface MoveResult {
   type: 'result';
+  resign?: {
+    winner: 'black' | 'white';
+    score: number;
+    depth: number;
+  };
   move: {
     action: 'reinforce' | 'rift';
     positions: { row: number; col: number }[];
@@ -182,6 +188,18 @@ interface BenchmarkNpsResult {
 const CENTER_RC = Math.floor(BOARD_SIZE / 2);
 const CENTER_INDEX = toIndex(CENTER_RC, CENTER_RC);
 
+function isMateCodedLossScore(score: number, depth: number, maxDepth: number): boolean {
+  if (!Number.isFinite(score)) return false;
+  if (score < CONFIG.LOSS_SCORE) return false;
+
+  const d = Number.isFinite(depth) && depth > 0 ? Math.floor(depth) : Math.max(1, Math.floor(maxDepth));
+  // Upper bound for the ply-offset used in mate-coded terminal scores:
+  // depth (main search) + quiescence + small margin for extensions / off-by-one.
+  const maxMatePlies = d + CONFIG.QUIESCENCE_DEPTH + 4;
+
+  return score <= CONFIG.LOSS_SCORE + maxMatePlies;
+}
+
 // ---- Ultra shared-TT backing (reuse to avoid repeated large SAB allocations) ----
 let ultraSharedTTBacking: SharedTranspositionTableBacking | null = null;
 
@@ -218,10 +236,36 @@ function normalizeOpeningPreset(value: unknown): OpeningPreset {
   return 'long-pro';
 }
 
+function normalizeNonNegativeInt(value: unknown, fallback: number): number {
+  if (typeof value !== 'number') return fallback;
+  if (!Number.isFinite(value) || value < 0) return fallback;
+  return Math.floor(value);
+}
+
+function normalizeScoreToWin(value: unknown): number {
+  // 0 means “unlimited” (play until exhaustion).
+  return normalizeNonNegativeInt(value, 1);
+}
+
+function normalizeScores(value: unknown): { black: number; white: number } {
+  const v = value as any;
+  return {
+    black: normalizeNonNegativeInt(v?.black, 0),
+    white: normalizeNonNegativeInt(v?.white, 0),
+  };
+}
+
 /**
  * Convert worker state to internal Board representation
  */
-function convertState(state: WorkerState): { board: Board; player: Color; openingPreset: OpeningPreset; moveIndex: number } {
+function convertState(state: WorkerState): {
+  board: Board;
+  player: Color;
+  openingPreset: OpeningPreset;
+  moveIndex: number;
+  scores: { black: number; white: number };
+  scoreToWin: number;
+} {
   const d = activeDihedral ?? { rot: 0, reflect: false };
   const board2d = activeDihedral ? transformLegacyBoard(state.board, d) : state.board;
   const koPos = activeDihedral ? transformLegacyKo(state.lastRiftedPosition, d) : state.lastRiftedPosition;
@@ -241,8 +285,10 @@ function convertState(state: WorkerState): { board: Board; player: Color; openin
   
   const openingPreset = normalizeOpeningPreset(state.openingPreset);
   const moveIndex = normalizeMoveIndex(state.moveIndex);
+  const scores = normalizeScores(state.scores);
+  const scoreToWin = normalizeScoreToWin(state.scoreToWin);
 
-  return { board, player, openingPreset, moveIndex };
+  return { board, player, openingPreset, moveIndex, scores, scoreToWin };
 }
 
 // ---- Dihedral randomization (per move) ----
@@ -272,16 +318,6 @@ function untransformLogMove(
   return { action: m.action, positions: untransformPositions(m.positions) };
 }
 
-// ---- NNUE weights (optional) ----
-let nnueWeightsPromise: Promise<NnueWeights | null> | null = null;
-
-function getNnueWeights(): Promise<NnueWeights | null> {
-  if (!nnueWeightsPromise) {
-    nnueWeightsPromise = loadNnueWeightsOptional(getBundledWeightsUrl());
-  }
-  return nnueWeightsPromise;
-}
-
 // ---- Pondering (background search during human turn) ----
 let ponderActive = false;
 let ponderGeneration = 0;
@@ -290,7 +326,14 @@ let ponderReplySession: SearchSession | null = null;
 let ponderSliceMs: number = 60;
 let ponderMaxDepth: number = CONFIG.MAX_DEPTH;
 let ponderDebug = false;
-let ponderLatestPosition: { board: Board; player: Color; openingPreset: OpeningPreset; moveIndex: number } | null = null;
+let ponderLatestPosition: {
+  board: Board;
+  player: Color;
+  openingPreset: OpeningPreset;
+  moveIndex: number;
+  scores: { black: number; white: number };
+  scoreToWin: number;
+} | null = null;
 
 let ponderDeadlineMs = 0;
 
@@ -317,7 +360,6 @@ let ponderReplyTotalsNodes = 0;
 let ponderReplyTotalsMs = 0;
 let ponderPredictedMoveKey: string | null = null;
 let ponderPredictedChildHash: string | null = null;
-let ponderNnueWeights: NnueWeights | null = null;
 let lastPonderSummary: PonderSummary | null = null;
 
 function moveToLogObject(move: Move | null): { action: 'reinforce' | 'rift'; positions: { row: number; col: number }[] } | null {
@@ -357,7 +399,6 @@ function resetPonderingState(): void {
   ponderReplyTotalsMs = 0;
   ponderPredictedMoveKey = null;
   ponderPredictedChildHash = null;
-  ponderNnueWeights = null;
 }
 
 function refreshPredictedLine(): void {
@@ -382,6 +423,10 @@ function refreshPredictedLine(): void {
   const child = cloneBoard(ponderLatestPosition.board);
   makeMove(child, predictedMove, ponderLatestPosition.player);
   const replyPlayer = getOpponent(ponderLatestPosition.player);
+  const childScores = { ...ponderLatestPosition.scores };
+  const scoring = applyScoringAndClear(child, predictedMove, ponderLatestPosition.player);
+  if (scoring.scoredBy === BLACK) childScores.black += scoring.points;
+  else if (scoring.scoredBy === WHITE) childScores.white += scoring.points;
   ponderPredictedChildHash = child.hash.toString();
   const replyMoveIndex = ponderLatestPosition.moveIndex + 1;
   const replyRootFilter = combineMoveFilters(
@@ -405,13 +450,23 @@ function refreshPredictedLine(): void {
       replyPlayer,
       ponderMaxDepth,
       tt,
-      ponderNnueWeights,
+      null,
       replyRootFilter,
       replyPly1Filter,
-      replyPly2Filter
+      replyPly2Filter,
+      childScores,
+      ponderLatestPosition.scoreToWin
     );
   } else {
-    ponderReplySession.setPosition(child, replyPlayer, replyRootFilter, replyPly1Filter, replyPly2Filter);
+    ponderReplySession.setPosition(
+      child,
+      replyPlayer,
+      replyRootFilter,
+      replyPly1Filter,
+      replyPly2Filter,
+      childScores,
+      ponderLatestPosition.scoreToWin
+    );
   }
 
   if (ponderDebug) {
@@ -511,23 +566,17 @@ async function runPonderLoop(generation: number): Promise<void> {
 async function startPondering(request: PonderStartRequest): Promise<void> {
   // Sample a new random dihedral for the upcoming AI move (and keep it stable across pondering).
   activeDihedral = randomDihedral();
-  const { board, player, openingPreset, moveIndex } = convertState(request.state);
+  const { board, player, openingPreset, moveIndex, scores, scoreToWin } = convertState(request.state);
   ponderSliceMs = Math.max(10, Math.min(200, Math.floor(request.config?.sliceMs ?? 60)));
   ponderMaxDepth = request.config?.maxDepth ?? CONFIG.MAX_DEPTH;
   ponderDebug = Boolean(request.config?.debug);
 
   resetPonderingState();
   ponderActive = true;
-  ponderLatestPosition = { board, player, openingPreset, moveIndex };
+  ponderLatestPosition = { board, player, openingPreset, moveIndex, scores, scoreToWin };
   ponderDeadlineMs = Date.now() + PONDER_MAX_TIME_MS;
   const myGen = ponderGeneration;
   lastPonderSummary = null;
-
-  const nnueWeights = await getNnueWeights();
-  // If pondering was cancelled/restarted while awaiting weights, bail.
-  if (!ponderActive || myGen !== ponderGeneration) return;
-
-  ponderNnueWeights = nnueWeights;
 
   const tt = getTranspositionTable();
   const rootMoveFilter = combineMoveFilters(
@@ -539,7 +588,19 @@ async function startPondering(request: PonderStartRequest): Promise<void> {
     noRiftFilterForOpening(openingPreset, moveIndex + 1)
   );
   const ply2MoveFilter = noRiftFilterForOpening(openingPreset, moveIndex + 2);
-  ponderRootSession = createSearchSession(board, player, ponderMaxDepth, tt, nnueWeights, rootMoveFilter, ply1MoveFilter, ply2MoveFilter);
+  // NNUE disabled (handcrafted eval only): pass null weights.
+  ponderRootSession = createSearchSession(
+    board,
+    player,
+    ponderMaxDepth,
+    tt,
+    null,
+    rootMoveFilter,
+    ply1MoveFilter,
+    ply2MoveFilter,
+    scores,
+    scoreToWin
+  );
   refreshPredictedLine();
 
   if (ponderDebug) {
@@ -559,9 +620,9 @@ async function startPondering(request: PonderStartRequest): Promise<void> {
 function updatePonderPosition(request: PositionUpdateRequest): void {
   // Keep the same dihedral for this upcoming move; if absent (shouldn't happen), create one.
   ensureActiveDihedral();
-  const { board, player, openingPreset, moveIndex } = convertState(request.state);
+  const { board, player, openingPreset, moveIndex, scores, scoreToWin } = convertState(request.state);
   ponderMaxDepth = request.config?.maxDepth ?? ponderMaxDepth;
-  ponderLatestPosition = { board, player, openingPreset, moveIndex };
+  ponderLatestPosition = { board, player, openingPreset, moveIndex, scores, scoreToWin };
 
   ponderRootTotalsNodes = 0;
   ponderRootTotalsMs = 0;
@@ -581,7 +642,7 @@ function updatePonderPosition(request: PositionUpdateRequest): void {
       noRiftFilterForOpening(openingPreset, moveIndex + 1)
     );
     const ply2MoveFilter = noRiftFilterForOpening(openingPreset, moveIndex + 2);
-    ponderRootSession.setPosition(board, player, rootMoveFilter, ply1MoveFilter, ply2MoveFilter);
+    ponderRootSession.setPosition(board, player, rootMoveFilter, ply1MoveFilter, ply2MoveFilter, scores, scoreToWin);
   }
   ponderReplySession = null;
   refreshPredictedLine();
@@ -606,7 +667,7 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
 
     // Ensure a dihedral exists for this move (AI-vs-AI has no ponderStart).
     ensureActiveDihedral();
-    const { board, player, openingPreset, moveIndex } = convertState(request.state);
+    const { board, player, openingPreset, moveIndex, scores, scoreToWin } = convertState(request.state);
     const rootMoveFilter = combineMoveFilters(
       getOpeningRootMoveFilter(openingPreset, moveIndex, player),
       noRiftFilterForOpening(openingPreset, moveIndex)
@@ -659,7 +720,8 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
       });
     }
 
-    const nnueWeights = await getNnueWeights();
+    // NNUE disabled (handcrafted eval only): keep null weights.
+    const nnueWeights = null;
 
     // ---- Ponder impact snapshot (was computed while opponent was thinking) ----
     const ponder = lastPonderSummary;
@@ -686,7 +748,7 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
       const ULTRA_MAX_TIME_MS = 60000;
       const deadlineMs = Date.now() + ULTRA_MAX_TIME_MS;
 
-      const allRootMoves = generateAllMoves(board, player);
+      const allRootMoves = generateAllMoves(board, player, { scores, scoreToWin });
       // Opening-aware root filtering (with safety fallback if it eliminates everything).
       const rootMoves = rootMoveFilter
         ? (() => {
@@ -698,9 +760,25 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
       // Fast-path: immediate winning root move (avoid spawning any pool).
       for (const { move } of rootMoves) {
         const undo = makeMove(board, move, player);
-        const winner = getWinnerAfterMove(board, move, player);
+        const scoring = applyScoringAndClear(board, move, player);
+        const b = scores.black + (scoring.scoredBy === BLACK ? scoring.points : 0);
+        const w = scores.white + (scoring.scoredBy === WHITE ? scoring.points : 0);
+        const matchWinner =
+          scoreToWin !== 0 && (b >= scoreToWin || w >= scoreToWin)
+            ? (b >= scoreToWin ? BLACK : WHITE)
+            : null;
+
+        if (scoring.cleared && scoring.scoredBy !== null) {
+          for (const idx of scoring.cleared) {
+            if (board.cells[idx] !== EMPTY) continue;
+            board.cells[idx] = scoring.scoredBy;
+            if (scoring.scoredBy === BLACK) board.blackCount++;
+            else if (scoring.scoredBy === WHITE) board.whiteCount++;
+          }
+        }
         unmakeMove(board, undo, player);
-        if (winner === player) {
+
+        if (matchWinner === player) {
           result = {
             completed: true,
             score: CONFIG.WIN_SCORE,
@@ -774,6 +852,8 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
         board: boardTo2D(board),
         playerToMove: player === BLACK ? 'black' : 'white',
         lastRiftedPosition,
+        scores,
+        scoreToWin,
         openingPreset,
         moveIndex,
       } as const;
@@ -958,7 +1038,7 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
           // Last-resort: run a local search for whatever time remains (at least a tiny slice),
           // so we don't return a misleading "all zeros" stat line.
           const remainingMs = Math.max(25, deadlineMs - Date.now());
-          const local = findBestMove(
+        const local = findBestMove(
             board,
             player,
             remainingMs,
@@ -966,7 +1046,9 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
             nnueWeights,
             rootMoveFilter,
             ply1ReplyMoveFilter,
-            ply2MoveFilter
+          ply2MoveFilter,
+          scores,
+          scoreToWin
           );
           result = local;
           nodes = local.nodes ?? 0;
@@ -1164,7 +1246,7 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
         usedReplySession = true;
         result = ponderReplySession.searchSlice(timeLimit);
       } else {
-        result = findBestMove(board, player, timeLimit, maxDepth, nnueWeights, rootMoveFilter, ply1ReplyMoveFilter, ply2MoveFilter);
+        result = findBestMove(board, player, timeLimit, maxDepth, nnueWeights, rootMoveFilter, ply1ReplyMoveFilter, ply2MoveFilter, scores, scoreToWin);
       }
       nodes = result.nodes ?? 0;
     }
@@ -1174,7 +1256,7 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
     
     if (!result.move) {
       console.warn('[AI Worker] No move found; attempting generated fallback');
-      const generated = generateAllMoves(board, player);
+      const generated = generateAllMoves(board, player, { scores, scoreToWin });
       let fallback: Move | null = null;
       for (const m of generated) {
         if (isMoveLegal(board, m.move, player) && (rootMoveFilter === null || rootMoveFilter(m.move))) {
@@ -1205,10 +1287,24 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
       return { type: 'result', move: null };
     }
 
+    // Optional resignation: only when the existing search already returned a mate/terminal-coded loss.
+    // No additional searching is performed.
+    const reachedDepth = result.depth ?? 0;
+    if (scoreToWin !== 0 && isMateCodedLossScore(result.score, reachedDepth, maxDepth)) {
+      const winner = player === BLACK ? 'white' : 'black';
+      clearActiveDihedral();
+      resetPonderingState();
+      return {
+        type: 'result',
+        resign: { winner, score: result.score, depth: reachedDepth },
+        move: null,
+      };
+    }
+
     // Guard: never emit an illegal move (can happen in rare TT/collision or edge states).
     let chosenMove: Move = baseMove;
     if (!isMoveLegal(board, chosenMove, player) || (rootMoveFilter !== null && !rootMoveFilter(chosenMove))) {
-      const generated = generateAllMoves(board, player);
+      const generated = generateAllMoves(board, player, { scores, scoreToWin });
       let fallback: Move | null = null;
       for (const m of generated) {
         if (isMoveLegal(board, m.move, player) && (rootMoveFilter === null || rootMoveFilter(m.move))) {
@@ -1294,9 +1390,9 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
     // into its naive recovery path.
     try {
       ensureActiveDihedral();
-      const { board, player, openingPreset, moveIndex } = convertState(request.state);
+      const { board, player, openingPreset, moveIndex, scores, scoreToWin } = convertState(request.state);
       const rootMoveFilter = getOpeningRootMoveFilter(openingPreset, moveIndex, player);
-      const generated = generateAllMoves(board, player);
+      const generated = generateAllMoves(board, player, { scores, scoreToWin });
       let fallback: Move | null = null;
       for (const m of generated) {
         if (isMoveLegal(board, m.move, player) && (rootMoveFilter === null || rootMoveFilter(m.move))) {

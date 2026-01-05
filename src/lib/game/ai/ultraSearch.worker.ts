@@ -9,7 +9,6 @@ import {
   cloneBoard,
   createSearchSession,
   getOpponent,
-  getWinnerAfterMove,
   makeMove,
   BLACK,
   WHITE,
@@ -18,8 +17,7 @@ import {
 } from './index';
 import type { Board, Color, Move } from './types';
 import type { SearchSession } from './search';
-import type { NnueWeights } from './nnue/weights';
-import { getBundledWeightsUrl, loadNnueWeightsOptional } from './nnue/weights';
+import { applyScoringAndClear } from './board';
 import { TranspositionTable } from './transposition';
 import type { OpeningPreset } from '../types';
 import { getOpeningPly1ReplyMoveFilter } from './openingFilters';
@@ -46,6 +44,8 @@ interface WorkerState {
   board: LegacyBoard;
   playerToMove: 'black' | 'white';
   lastRiftedPosition: { row: number; col: number } | null;
+  scores?: { black: number; white: number };
+  scoreToWin?: number;
   openingPreset?: OpeningPreset;
   moveIndex?: number;
 }
@@ -83,23 +83,34 @@ function normalizeOpeningPreset(value: unknown): OpeningPreset {
   return 'long-pro';
 }
 
-function convertState(state: WorkerState): { board: Board; player: Color } {
+function normalizeNonNegativeInt(value: unknown, fallback: number): number {
+  if (typeof value !== 'number') return fallback;
+  if (!Number.isFinite(value) || value < 0) return fallback;
+  return Math.floor(value);
+}
+
+function normalizeScores(value: unknown): { black: number; white: number } {
+  const v = value as any;
+  return {
+    black: normalizeNonNegativeInt(v?.black, 0),
+    white: normalizeNonNegativeInt(v?.white, 0),
+  };
+}
+
+function normalizeScoreToWin(value: unknown): number {
+  return normalizeNonNegativeInt(value, 1);
+}
+
+function convertState(state: WorkerState): { board: Board; player: Color; scores: { black: number; white: number }; scoreToWin: number } {
   let koPosition: number | null = null;
   if (state.lastRiftedPosition) {
     koPosition = state.lastRiftedPosition.row * BOARD_SIZE + state.lastRiftedPosition.col;
   }
   const board = boardFrom2D(state.board, koPosition);
   const player: Color = state.playerToMove === 'black' ? BLACK : WHITE;
-  return { board, player };
-}
-
-// ---- NNUE weights (optional, cached per worker) ----
-let nnueWeightsPromise: Promise<NnueWeights | null> | null = null;
-function getNnueWeights(): Promise<NnueWeights | null> {
-  if (!nnueWeightsPromise) {
-    nnueWeightsPromise = loadNnueWeightsOptional(getBundledWeightsUrl());
-  }
-  return nnueWeightsPromise;
+  const scores = normalizeScores(state.scores);
+  const scoreToWin = normalizeScoreToWin(state.scoreToWin);
+  return { board, player, scores, scoreToWin };
 }
 
 function msLeft(deadlineMs: number): number {
@@ -123,13 +134,13 @@ self.onmessage = (e: MessageEvent) => {
   if (req.type !== 'analyzeRootMoves') return;
 
   void (async () => {
-    const { board: rootBoard, player: rootPlayer } = convertState(req.state);
+    const { board: rootBoard, player: rootPlayer, scores: rootScores, scoreToWin } = convertState(req.state);
     const opponent = getOpponent(rootPlayer);
     const maxDepth = req.maxDepth;
     const deadlineMs = req.deadlineMs;
 
     const tt = new TranspositionTable(req.ttSize);
-    const nnueWeights = await getNnueWeights();
+    const nnueWeights = null;
 
     // Long Pro lookahead: if root is White on moveIndex=1, Black's immediate reply (moveIndex=2)
     // is restricted outside the center region. Apply that as the root filter for each child session.
@@ -153,18 +164,36 @@ self.onmessage = (e: MessageEvent) => {
 
     for (const mv of req.rootMoves) {
       const child = cloneBoard(rootBoard);
-      const undo = makeMove(child, mv, rootPlayer);
-      const winner = getWinnerAfterMove(child, mv, rootPlayer);
-      // No need to keep undo; child is dedicated.
-      void undo;
+      makeMove(child, mv, rootPlayer);
 
-      if (winner !== null) {
-        const score = winner === rootPlayer ? CONFIG.WIN_SCORE : CONFIG.LOSS_SCORE;
+      const childScores = { ...rootScores };
+      const scoring = applyScoringAndClear(child, mv, rootPlayer);
+      if (scoring.scoredBy === BLACK) childScores.black += scoring.points;
+      else if (scoring.scoredBy === WHITE) childScores.white += scoring.points;
+
+      const matchWinner =
+        scoreToWin !== 0 && (childScores.black >= scoreToWin || childScores.white >= scoreToWin)
+          ? (childScores.black >= scoreToWin ? BLACK : WHITE)
+          : null;
+
+      if (matchWinner !== null) {
+        const score = matchWinner === rootPlayer ? CONFIG.WIN_SCORE : CONFIG.LOSS_SCORE;
         sessions.push({ rootMove: mv, immediate: { score, depth: 1 }, session: null, nodes: 0 });
         continue;
       }
 
-      const session = createSearchSession(child, opponent, maxDepth, tt, nnueWeights, childRootFilter, childPly1Filter, null);
+      const session = createSearchSession(
+        child,
+        opponent,
+        maxDepth,
+        tt,
+        nnueWeights,
+        childRootFilter,
+        childPly1Filter,
+        null,
+        childScores,
+        scoreToWin
+      );
       sessions.push({ rootMove: mv, immediate: null, session, nodes: 0 });
     }
 

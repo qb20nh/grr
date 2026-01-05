@@ -499,12 +499,38 @@ export function createGameEngine(): GameEngine {
       const data = e.data as any;
       const type = data?.type as unknown;
       const move = data?.move as any;
+      const resign = data?.resign as any;
       const workerError = data?.error as unknown;
       
       if (type === 'result') {
         if (workerError) {
           console.error('[AI] Worker reported error context', workerError);
         }
+
+        // AI resignation: no fallback; end immediately (but still respect stale-result guards below).
+        if (resign && resign.winner) {
+          const state = getState();
+          // Ignore stale results (e.g., game ended or turn changed while the worker was thinking).
+          if (state.phase !== 'playing' || state.endReason !== null) {
+            gameStore.setAiThinking(false);
+            return;
+          }
+          if (state.gameMode === 'ai-vs-ai' && state.currentPlayer !== color) {
+            gameStore.setAiThinking(false);
+            return;
+          }
+          if (state.gameMode === 'vs-ai' && state.aiColor !== null && state.currentPlayer !== state.aiColor) {
+            gameStore.setAiThinking(false);
+            return;
+          }
+
+          gameStore.setAiThinking(false);
+          const winnerColor = getOpponent(state.currentPlayer);
+          console.log('[AI] Resigning', { winner: winnerColor, score: resign.score, depth: resign.depth });
+          gameStore.endGame(winnerColor, 'resign');
+          return;
+        }
+
         const findFallbackReinforce = (state: GameState): Position[] | null => {
           const openingRequiresTwo = isLongProRestrictedBlackSecondMove(state);
 
@@ -773,6 +799,8 @@ export function createGameEngine(): GameEngine {
         aiColor: state.aiColor,
         playerToMove: state.currentPlayer,
         lastRiftedPosition: state.lastRiftedPosition,
+        scores: state.scores,
+        scoreToWin: state.scoreToWin,
         openingPreset: state.openingPreset,
         moveIndex: state.moveHistory.length,
       },
@@ -810,6 +838,8 @@ export function createGameEngine(): GameEngine {
             aiColor: state.aiColor,
             playerToMove: state.currentPlayer,
             lastRiftedPosition: state.lastRiftedPosition,
+            scores: state.scores,
+            scoreToWin: state.scoreToWin,
             openingPreset: state.openingPreset,
             moveIndex: state.moveHistory.length,
           }
@@ -861,6 +891,8 @@ export function createGameEngine(): GameEngine {
         aiColor: workerColor,
         playerToMove: state.currentPlayer,
         lastRiftedPosition: state.lastRiftedPosition,
+        scores: state.scores,
+        scoreToWin: state.scoreToWin,
         openingPreset: state.openingPreset,
         moveIndex: state.moveHistory.length,
       },
