@@ -1249,7 +1249,24 @@ export function findBestMove(
   ply1MoveFilter: ((m: Move) => boolean) | null = null,
   ply2MoveFilter: ((m: Move) => boolean) | null = null,
   scores: { black: number; white: number } = { black: 0, white: 0 },
-  scoreToWin: number = 1
+  scoreToWin: number = 1,
+  options?: {
+    tt?: TranspositionTable;
+    /**
+     * When true, keep killer/history move ordering between calls. This is the default behavior
+     * for the baseline engine.
+     */
+    preserveMoveOrdering?: boolean;
+    /**
+     * When true, do not age the TT for this search (advanced; default is to age once per call).
+     */
+    preserveTTAge?: boolean;
+    /**
+     * Optional root ordering hint. This does not force the move; it seeds the PV so even a tiny
+     * budget tends to play it, and it becomes the PV move searched first.
+     */
+    rootMoveHint?: Move | null;
+  }
 ): SearchResult {
   const startMs = Date.now();
   // Quick check for obvious moves
@@ -1406,7 +1423,7 @@ export function findBestMove(
     // Probe whether the opponent has a direct match-ending move on their next turn.
     const underCriticalThreat = hasCriticalThreat(board, opponent);
     const underImmediateThreat = underCriticalThreat || sideHasImmediateMatchWinningMove(opponent, ply1MoveFilter);
-    let rootMoveHint: Move | null = null;
+    let rootMoveHint: Move | null = options?.rootMoveHint ?? null;
     let rootMoveHintNodes = 0;
 
     if (underImmediateThreat) {
@@ -1449,7 +1466,9 @@ export function findBestMove(
       }
 
       const result = iterativeDeepening(board, player, remainingMs, maxDepth, {
-        preserveMoveOrdering: true,
+        preserveMoveOrdering: options?.preserveMoveOrdering ?? true,
+        tt: options?.tt,
+        preserveTTAge: options?.preserveTTAge,
         nnueWeights,
         scores,
         scoreToWin,
@@ -1475,10 +1494,13 @@ export function findBestMove(
   }
 
   const result = iterativeDeepening(board, player, remainingMs, maxDepth, {
-    preserveMoveOrdering: true,
+    preserveMoveOrdering: options?.preserveMoveOrdering ?? true,
+    tt: options?.tt,
+    preserveTTAge: options?.preserveTTAge,
     nnueWeights,
     scores,
     scoreToWin,
+    rootMoveHint: options?.rootMoveHint ?? null,
     rootMoveFilter: rootMoveFilter ?? undefined,
     ply1MoveFilter: ply1MoveFilter ?? undefined,
     ply2MoveFilter: ply2MoveFilter ?? undefined,

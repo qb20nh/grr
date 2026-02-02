@@ -24,6 +24,7 @@ import {
   isSingleWinMove,
   checkWinAt,
   generateAllMoves,
+  hasCriticalThreat,
   createSharedTranspositionTableBacking,
   getTranspositionTable,
   BLACK,
@@ -43,6 +44,7 @@ import type { OpeningPreset } from './types';
 import type { SharedTranspositionTableBacking } from './ai/index';
 import { getOpeningPly1ReplyMoveFilter, getOpeningRootMoveFilter } from './ai/openingFilters';
 import { LONG_PRO_RIFT_FORBIDDEN_FIRST_TURNS } from './riftRules';
+import { UltraCoordinator } from './ai/ultraV2/UltraCoordinator';
 
 const NO_RIFT_FILTER = (m: Move): boolean => m.action !== 'rift';
 
@@ -76,6 +78,14 @@ interface FindMoveRequest {
   config?: {
     maxTime?: number;
     maxDepth?: number;
+    /** High-level AI variant selection (used by arena gating + per-side configs). */
+    variant?: 'baseline5s' | 'singleUltra60s' | 'ultraV2_60s';
+    /**
+     * UltraThink implementation choice.
+     * - false/undefined: run the normal single-thread search with a larger time budget (stronger, more stable)
+     * - true: use the experimental parallel Ultra implementation (root-split / shared-TT PVS)
+     */
+    ultraParallel?: boolean;
     debug?: boolean;
   };
 }
@@ -223,10 +233,39 @@ function getUltraSharedTTBackingBestEffort(): SharedTranspositionTableBacking | 
   return null;
 }
 
+// ---- Ultra shared-TT PVS worker pool (persistent across moves) ----
+let ultraPvsPool: Worker[] = [];
+let ultraPvsPoolBacking: SharedTranspositionTableBacking | null = null;
+let ultraPvsNextRequestId = 1;
+
+function terminateUltraPvsPool(): void {
+  for (const w of ultraPvsPool) {
+    try {
+      w.terminate();
+    } catch {
+      // ignore
+    }
+  }
+  ultraPvsPool = [];
+  ultraPvsPoolBacking = null;
+}
+
+// ---- UltraV2 coordinator (persistent pool + shared TT) ----
+let ultraV2Coordinator: UltraCoordinator | null = null;
+
 function normalizeMoveIndex(value: unknown): number {
   if (typeof value !== 'number') return 0;
   if (!Number.isFinite(value) || value < 0) return 0;
   return Math.floor(value);
+}
+
+type AiVariant = 'baseline5s' | 'singleUltra60s' | 'ultraV2_60s';
+
+function normalizeAiVariant(value: unknown): AiVariant | null {
+  if (value === 'baseline5s' || value === 'singleUltra60s' || value === 'ultraV2_60s') {
+    return value;
+  }
+  return null;
 }
 
 function normalizeOpeningPreset(value: unknown): OpeningPreset {
@@ -699,21 +738,46 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
     // ---- Time allocation (hard-capped) ----
     // Default behavior is to use the caller's full per-move budget (clamped),
     // and rely on the search to terminate early only for forced outcomes.
-    // Spectate can request "Ultra" (maxTime=0) which triggers a parallel, 60s-capped root-split search.
+    // Spectate can request "Ultra" (maxTime=0) which uses a 60s capped budget.
+    // By default we run the normal (single-thread) search with more time; the parallel Ultra
+    // implementation is opt-in via `config.ultraParallel`.
     const requestedMaxTime = request.config?.maxTime;
-    const ultraThink = requestedMaxTime === 0;
-    const requestedTime =
-      typeof requestedMaxTime === 'number' && requestedMaxTime > 0
-        ? requestedMaxTime
-        : CONFIG.DEFAULT_TIME;
-    const hardCapMs = 5000;
-    const baseTime = Math.max(CONFIG.MIN_TIME, Math.min(hardCapMs, Math.round(requestedTime)));
-    const timeLimit = baseTime;
+    const variant = normalizeAiVariant(request.config?.variant);
+    const hardCapMs = 5000; // baseline clamp
+
+    let ultraThink = false;
+    let forceUltraSingleThread = false;
+    let timeLimit: number = CONFIG.DEFAULT_TIME;
+
+    if (variant === 'baseline5s') {
+      ultraThink = false;
+      timeLimit = 5000;
+    } else if (variant === 'singleUltra60s') {
+      ultraThink = true;
+      forceUltraSingleThread = true;
+      timeLimit = 60000;
+    } else if (variant === 'ultraV2_60s') {
+      ultraThink = true;
+      timeLimit = 60000;
+    } else {
+      const legacyUltra = requestedMaxTime === 0;
+      ultraThink = legacyUltra;
+      if (legacyUltra) {
+        timeLimit = 60000;
+      } else {
+        const requestedTime =
+          typeof requestedMaxTime === 'number' && requestedMaxTime > 0
+            ? requestedMaxTime
+            : CONFIG.DEFAULT_TIME;
+        timeLimit = Math.max(CONFIG.MIN_TIME, Math.min(hardCapMs, Math.round(requestedTime)));
+      }
+    }
     
     const maxDepth = request.config?.maxDepth ?? CONFIG.MAX_DEPTH;
     
     if (request.config?.debug) {
       console.log('[AI Worker] Starting search', {
+        variant: variant ?? null,
         timeLimit: ultraThink ? 'ultra(60s)' : timeLimit,
         maxDepth,
         stoneCount: board.blackCount + board.whiteCount,
@@ -743,8 +807,27 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
     };
     let nodes = 0;
 
-    if (ultraThink) {
-      // ---- UltraThink: 60s capped + all cores ----
+    if (ultraThink && (forceUltraSingleThread || request.config?.ultraParallel === false)) {
+      // ---- UltraThink (single-thread fallback): same search as normal mode, just more time ----
+      //
+      // This is mainly for debugging. UltraThink is intended to be multi-core by default.
+      const ULTRA_MAX_TIME_MS = 60000;
+      const ultraMaxDepth = Math.max(maxDepth, 64);
+      result = findBestMove(
+        board,
+        player,
+        ULTRA_MAX_TIME_MS,
+        ultraMaxDepth,
+        nnueWeights,
+        rootMoveFilter,
+        ply1ReplyMoveFilter,
+        ply2MoveFilter,
+        scores,
+        scoreToWin
+      );
+      nodes = result.nodes ?? 0;
+    } else if (ultraThink && request.config?.ultraParallel === true) {
+      // ---- UltraThink (legacy parallel path; debug-only) ----
       const ULTRA_MAX_TIME_MS = 60000;
       const deadlineMs = Date.now() + ULTRA_MAX_TIME_MS;
 
@@ -909,7 +992,6 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
           w.addEventListener('error', onErr, { once: true });
         });
 
-      let ultraPvsRequestId = 1;
       const runRootMove = async (
         w: Worker,
         rootMove: Move,
@@ -919,7 +1001,7 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
         deadline: number
       ): Promise<{ completed: boolean; score: number; nodes: number } | null> => {
         const waitMs = Math.max(0, deadline - Date.now()) + 50;
-        const requestId = ultraPvsRequestId++;
+        const requestId = ultraPvsNextRequestId++;
         const wait = waitForRootMoveResult(w, requestId, waitMs);
         w.postMessage({
           type: 'searchRootMove',
@@ -1011,7 +1093,7 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
 
         for (const w of workers) w.terminate();
 
-        // Reduce to a best move (prefer deeper, then score).
+        // Reduce to a best move (prefer higher score, then depth).
         let localNodes = 0;
         let best: { move: Move; score: number; depth: number; nodes: number } | null = null;
         for (const entry of results) {
@@ -1023,14 +1105,14 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
             best = r;
             continue;
           }
-          if ((r.depth ?? 0) !== (best.depth ?? 0)) {
-            if ((r.depth ?? 0) > (best.depth ?? 0)) best = r;
-            continue;
-          }
           if ((r.score ?? 0) > (best.score ?? 0)) {
             best = r;
-          } else if (best && (r.score ?? 0) === (best.score ?? 0)) {
-            if (Math.random() < 0.5) best = r;
+          } else if ((r.score ?? 0) === (best.score ?? 0)) {
+            if ((r.depth ?? 0) > (best.depth ?? 0)) {
+              best = r;
+            } else if ((r.depth ?? 0) === (best.depth ?? 0)) {
+              if (Math.random() < 0.5) best = r;
+            }
           }
         }
 
@@ -1077,35 +1159,33 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
         } else {
           try {
             usedSharedTT = true;
+            if (ultraPvsPoolBacking !== backing) {
+              terminateUltraPvsPool();
+              ultraPvsPoolBacking = backing;
+            }
 
-            const workers: Worker[] = [];
-            // Initialize workers with listeners armed first (avoid missing fast replies).
+            // Initialize any missing workers once and keep them alive across moves.
+            // This makes Shared-TT aging effective and avoids per-turn worker startup overhead.
             const initDeadline = Math.min(deadlineMs, Date.now() + 2000);
             const initWaitMs = Math.max(1, initDeadline - Date.now());
-            const readyPromises: Promise<boolean>[] = [];
-            for (let i = 0; i < workerCount; i++) {
+            while (ultraPvsPool.length < workerCount) {
               const w = new Worker(new URL('./ai/ultraPvs.worker.ts', import.meta.url), { type: 'module' });
-              workers.push(w);
               const wait = waitForType(w, 'ultraPvsReady', initWaitMs).then(msg => Boolean(msg && msg.type === 'ultraPvsReady'));
-              readyPromises.push(wait);
               w.postMessage({ type: 'initSharedTT', backing });
-            }
-
-            const ready = await Promise.all(readyPromises);
-
-            const activeWorkers: Worker[] = [];
-            for (let i = 0; i < workers.length; i++) {
-              const w = workers[i]!;
-              if (!ready[i]) {
+              const ok = await wait;
+              if (!ok) {
                 w.terminate();
-                continue;
+                break;
               }
-              activeWorkers.push(w);
+              ultraPvsPool.push(w);
             }
+
+            let activeWorkers: Worker[] = ultraPvsPool.slice(0, Math.min(workerCount, ultraPvsPool.length));
 
             if (activeWorkers.length === 0) {
               // If we couldn't bring up the shared pool, fall back to the root-split Ultra.
               usedSharedTT = false;
+              terminateUltraPvsPool();
               await runUltraRootSplitFallback();
               didComputeUltraResult = true;
             } else {
@@ -1116,13 +1196,42 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
                 posPromises.push(wait);
                 w.postMessage({ type: 'setPosition', state: ultraState });
               }
-              await Promise.all(posPromises);
+              const posReady = await Promise.all(posPromises);
+
+              // Drop any workers that failed to accept the position.
+              if (posReady.some(r => !r)) {
+                const stillAlive: Worker[] = [];
+                for (let i = 0; i < activeWorkers.length; i++) {
+                  const w = activeWorkers[i]!;
+                  if (posReady[i]) {
+                    stillAlive.push(w);
+                  } else {
+                    w.terminate();
+                    ultraPvsPool = ultraPvsPool.filter(x => x !== w);
+                  }
+                }
+                activeWorkers = stillAlive;
+              }
+
+              if (activeWorkers.length === 0) {
+                usedSharedTT = false;
+                terminateUltraPvsPool();
+                await runUltraRootSplitFallback();
+                didComputeUltraResult = true;
+              } else {
 
               let moveList: Move[] = movesOnly.slice();
               let bestMoveSoFar: Move = moveList[0]!;
               let bestScoreSoFar = 0;
               let bestDepthSoFar = 0;
               let totalNodes = 0;
+
+              // Root progressive widening (mirror the single-thread search):
+              // avoid spending huge time on low-value root moves at shallow depths.
+              const rootOpponent = getOpponent(player);
+              const rootUnderCriticalThreat = hasCriticalThreat(board, rootOpponent);
+              const rootBase = rootUnderCriticalThreat ? 24 : 12;
+              const rootPerDepth = rootUnderCriticalThreat ? 6 : 4;
 
               // Ultra wants to keep deepening until the deadline; lift the depth cap.
               const ultraMaxDepth = Math.max(maxDepth, 64);
@@ -1131,6 +1240,11 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
                 const now = Date.now();
                 if (now >= deadlineMs) break;
                 const depthDeadline = deadlineMs;
+
+                const limit = Math.min(moveList.length, rootBase + rootPerDepth * Math.max(0, depth - 1));
+                const prefix = limit < moveList.length ? moveList.slice(0, limit) : moveList;
+                const tail = limit < moveList.length ? moveList.slice(limit) : [];
+                const depthScores = new Map<Move, number>();
 
                 // 1) Search PV move first (full window).
                 const pvWorker = activeWorkers[0]!;
@@ -1144,13 +1258,14 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
                 );
                 if (!pvRes || !pvRes.completed) break;
                 totalNodes += pvRes.nodes;
+                depthScores.set(bestMoveSoFar, pvRes.score);
 
                 let bestAtDepth = pvRes.score;
                 let bestMoveAtDepth = bestMoveSoFar;
                 let alpha = bestAtDepth;
 
                 // 2) Search remaining moves at null-window in parallel.
-                const others = moveList.filter(m => m !== bestMoveSoFar);
+                const others = prefix.filter(m => m !== bestMoveSoFar);
                 const nullBeta = Math.min(CONFIG.INFINITY, alpha + 1);
 
                 let next = 0;
@@ -1177,6 +1292,9 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
 
                 for (const r of nullResults) {
                   totalNodes += r.nodes;
+                  if (r.completed) {
+                    depthScores.set(r.move, r.score);
+                  }
                   if (!r.completed) {
                     // Ran out of time at this depth; keep previous best.
                     break;
@@ -1190,6 +1308,7 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
                   const full = await runRootMove(w, fh.move, depth, alpha, CONFIG.INFINITY, depthDeadline);
                   if (!full || !full.completed) break;
                   totalNodes += full.nodes;
+                  depthScores.set(fh.move, full.score);
                   if (full.score > bestAtDepth) {
                     bestAtDepth = full.score;
                     bestMoveAtDepth = fh.move;
@@ -1201,21 +1320,33 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
                 bestScoreSoFar = bestAtDepth;
                 bestDepthSoFar = depth;
 
-                // Reorder PV to front for next depth.
-                if (moveList[0] !== bestMoveSoFar) {
-                  moveList = [bestMoveSoFar, ...moveList.filter(m => m !== bestMoveSoFar)];
-                }
+                // Reorder searched root moves by score for the next depth (keep tail as-is).
+                // This approximates iterative-deepening root reordering and helps Ultra go deeper
+                // on the most promising moves instead of burning time on low-value ones.
+                const ranked = prefix.map((m, idx) => ({ m, idx, score: depthScores.get(m) }));
+                ranked.sort((a, b) => {
+                  if (a.m === bestMoveSoFar) return -1;
+                  if (b.m === bestMoveSoFar) return 1;
+                  const as = a.score;
+                  const bs = b.score;
+                  if (as === undefined && bs === undefined) return a.idx - b.idx;
+                  if (as === undefined) return 1;
+                  if (bs === undefined) return -1;
+                  if (bs !== as) return bs - as;
+                  return a.idx - b.idx;
+                });
+                moveList = ranked.map(x => x.m).concat(tail);
 
                 if (bestScoreSoFar >= CONFIG.WIN_SCORE - 100) break;
                 if (bestScoreSoFar <= CONFIG.LOSS_SCORE + 100) break;
               }
 
-              for (const w of activeWorkers) w.terminate();
-
               // If we never completed even depth 1 (common symptom: worker crash / unsupported Atomics),
               // do NOT return a "depth=0,nodes=0" pseudo-result. Fall back to root-split Ultra.
               if (bestDepthSoFar <= 0 || totalNodes <= 0) {
                 usedSharedTT = false;
+                // Shared pool appears unhealthy; reset it before falling back.
+                terminateUltraPvsPool();
                 await runUltraRootSplitFallback();
                 didComputeUltraResult = true;
               } else {
@@ -1229,9 +1360,11 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
                 nodes = totalNodes;
                 didComputeUltraResult = true;
               }
+              }
             }
           } catch {
             usedSharedTT = false;
+            terminateUltraPvsPool();
             await runUltraRootSplitFallback();
             didComputeUltraResult = true;
           }
@@ -1240,6 +1373,73 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
 
       if (!didComputeUltraResult) {
         await runUltraRootSplitFallback();
+      }
+    } else if (ultraThink) {
+      // ---- UltraThink v2: multi-core 60s (persistent pool + shared TT) ----
+      const ULTRA_MAX_TIME_MS = 60000;
+      const deadlineMs = Date.now() + ULTRA_MAX_TIME_MS;
+      const ultraMaxDepth = Math.max(maxDepth, 64);
+
+      const koIndex = board.koPosition;
+      const lastRiftedPosition =
+        typeof koIndex === 'number'
+          ? { row: Math.floor(koIndex / BOARD_SIZE), col: koIndex % BOARD_SIZE }
+          : null;
+
+      const ultraState = {
+        board: boardTo2D(board),
+        playerToMove: player === BLACK ? 'black' : 'white',
+        lastRiftedPosition,
+        scores,
+        scoreToWin,
+        openingPreset,
+        moveIndex,
+      } as const;
+
+      const hc = (globalThis as unknown as { navigator?: { hardwareConcurrency?: number } }).navigator?.hardwareConcurrency;
+      const workerCount = Math.max(1, Math.floor(hc ?? 1));
+
+      ultraV2Coordinator ??= new UltraCoordinator();
+      const v2 = await ultraV2Coordinator.search(ultraState, {
+        deadlineMs,
+        maxDepth: ultraMaxDepth,
+        workerCount,
+      });
+
+      if (request.config?.debug) {
+        console.log('[AI Worker] UltraV2', {
+          hc: hc ?? null,
+          workerCountRequested: workerCount,
+          usedSharedTT: v2.usedSharedTT,
+          gotBest: Boolean(v2.best),
+          nodes: v2.totalNodes,
+        });
+      }
+
+      if (v2.best) {
+        nodes = v2.totalNodes;
+        result = {
+          completed: true,
+          score: v2.best.score,
+          move: v2.best.move,
+          depth: v2.best.depth,
+          nodes,
+        };
+      } else {
+        // Fallback: single-thread 60s baseline (e.g. when SharedArrayBuffer isn't available).
+        result = findBestMove(
+          board,
+          player,
+          ULTRA_MAX_TIME_MS,
+          ultraMaxDepth,
+          nnueWeights,
+          rootMoveFilter,
+          ply1ReplyMoveFilter,
+          ply2MoveFilter,
+          scores,
+          scoreToWin
+        );
+        nodes = result.nodes ?? 0;
       }
     } else {
       if (predictedHit === true && ponderReplySession && ponderPredictedChildHash === board.hash.toString()) {

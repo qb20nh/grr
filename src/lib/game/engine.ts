@@ -805,7 +805,8 @@ export function createGameEngine(): GameEngine {
         moveIndex: state.moveHistory.length,
       },
       config: {
-        sliceMs: 60
+        sliceMs: 60,
+        variant: state.vsAiVariant ?? undefined,
       }
     });
   }
@@ -842,7 +843,10 @@ export function createGameEngine(): GameEngine {
             scoreToWin: state.scoreToWin,
             openingPreset: state.openingPreset,
             moveIndex: state.moveHistory.length,
-          }
+          },
+          config: {
+            variant: state.vsAiVariant ?? undefined,
+          },
         });
         ponderSignature = sig;
       }
@@ -884,6 +888,12 @@ export function createGameEngine(): GameEngine {
     });
     
     // Use web worker for AI computation
+    const variant =
+      state.gameMode === 'ai-vs-ai'
+        ? (workerColor === 'black' ? state.spectateVariantBlack : state.spectateVariantWhite)
+        : state.gameMode === 'vs-ai'
+          ? state.vsAiVariant
+          : null;
     postAiMessage(workerColor, {
       type: 'findBestMove',
       state: {
@@ -898,9 +908,12 @@ export function createGameEngine(): GameEngine {
       },
       config:
         state.gameMode === 'ai-vs-ai'
-          ? { maxTime: workerColor === 'black' ? state.spectateMaxTimeMsBlack : state.spectateMaxTimeMsWhite }
+          ? {
+              maxTime: workerColor === 'black' ? state.spectateMaxTimeMsBlack : state.spectateMaxTimeMsWhite,
+              variant: variant ?? undefined,
+            }
           : state.gameMode === 'vs-ai'
-            ? { maxTime: state.vsAiMaxTimeMs }
+            ? { maxTime: state.vsAiMaxTimeMs, variant: variant ?? undefined }
             : undefined
     });
   }

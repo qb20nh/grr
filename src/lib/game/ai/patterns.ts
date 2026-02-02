@@ -28,6 +28,20 @@ export interface LineInfo {
 
 const NO_POS: CellIndex = -1;
 
+function stepsToEdge(row: number, col: number, dr: number, dc: number): number {
+  // How many steps can we take from (row,col) in direction (dr,dc) before leaving the board?
+  // (dr,dc) are always in {-1,0,1} in this engine.
+  const rowSteps = dr === 0 ? 99 : dr > 0 ? (BOARD_SIZE - 1 - row) : row;
+  const colSteps = dc === 0 ? 99 : dc > 0 ? (BOARD_SIZE - 1 - col) : col;
+  return Math.min(rowSteps, colSteps);
+}
+
+function maxInBoundsLineLength(row: number, col: number, dr: number, dc: number): number {
+  // Total number of in-bounds cells on the full line through (row,col) in direction (dr,dc).
+  // If this is < 5, an exact-5 score is impossible on this line, regardless of play.
+  return 1 + stepsToEdge(row, col, dr, dc) + stepsToEdge(row, col, -dr, -dc);
+}
+
 function rankFor(count: number, openEnds: number, gaps: number): number {
   // Exactly 5 = win
   if (count === 5 && gaps === 0) return 9; // FIVE
@@ -73,6 +87,20 @@ export function scanLine(
   const [dRow, dCol] = DIRECTIONS[dirIdx];
   const startRow = Math.floor(pos / BOARD_SIZE);
   const startCol = pos % BOARD_SIZE;
+
+  // If the board edge makes an exact-5 impossible on this line (e.g. short diagonals near corners),
+  // treat it as pattern-less. This prevents the eval from chasing "dead" lines that can never score.
+  if (maxInBoundsLineLength(startRow, startCol, dRow, dCol) < 5) {
+    return {
+      count: 1,
+      openEnds: 0,
+      gaps: 0,
+      gapPos: NO_POS,
+      extendCount: 0,
+      extend1: NO_POS,
+      extend2: NO_POS,
+    };
+  }
 
   const isOpenForPlacement = (idx: CellIndex): boolean =>
     board.cells[idx] === EMPTY && (ignoreKo || board.koPosition !== idx);

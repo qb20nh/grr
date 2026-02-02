@@ -3,7 +3,7 @@
   import { gameStore, gamePhase } from '$lib/stores/gameStore';
   import { isReplaying } from '$lib/stores/replayStore';
   import { gameEngine, setFastMode } from '$lib/game/engine';
-  import type { OpeningPreset, ScoreToWin } from '$lib/game/types';
+  import type { AiVariant, OpeningPreset, ScoreToWin } from '$lib/game/types';
   import MenuScreen from '$lib/components/MenuScreen.svelte';
   import GameBoard from '$lib/components/GameBoard.svelte';
   import ActionPanel from '$lib/components/ActionPanel.svelte';
@@ -67,7 +67,23 @@
     
     // Check for auto-start spectate mode
     if (params.get('mode') === 'spectate') {
-      const timeMs = parseInt(params.get('time') ?? '1000', 10) || 1000;
+      const normalizeTimeMs = (value: string | null, fallback: number): number => {
+        if (value == null) return fallback;
+        const n = Number.parseInt(value, 10);
+        if (!Number.isFinite(n) || n < 0) return fallback;
+        return n;
+      };
+
+      const normalizeVariant = (value: string | null): AiVariant | null => {
+        if (value === 'baseline5s' || value === 'singleUltra60s' || value === 'ultraV2_60s') return value;
+        return null;
+      };
+
+      const baseTimeMs = normalizeTimeMs(params.get('time'), 1000);
+      const timeBlackMs = normalizeTimeMs(params.get('timeBlack'), baseTimeMs);
+      const timeWhiteMs = normalizeTimeMs(params.get('timeWhite'), baseTimeMs);
+      const variantBlack = normalizeVariant(params.get('variantBlack'));
+      const variantWhite = normalizeVariant(params.get('variantWhite'));
       const openingParam = params.get('opening') ?? 'long-pro';
       const scoreParam = parseInt(params.get('score') ?? '1', 10);
       
@@ -83,8 +99,16 @@
         ? (scoreParam as ScoreToWin) 
         : 1;
       
-      // Start spectate game with same time for both players
-      gameStore.startGame('ai-vs-ai', timeMs, timeMs, scoreToWin, opening);
+      // Start spectate game (allows per-side time budgets)
+      gameStore.startGame(
+        'ai-vs-ai',
+        timeBlackMs,
+        timeWhiteMs,
+        scoreToWin,
+        opening,
+        variantBlack ?? undefined,
+        variantWhite ?? undefined
+      );
     }
 
     return () => {

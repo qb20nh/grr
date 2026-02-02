@@ -9,6 +9,11 @@ export interface BoardRenderOptions {
   pendingRift: Position | null;
   lastPlacedPositions: Position[];
   lastRiftedPosition: Position | null;
+  /**
+   * When present alongside `lastRiftedPosition`, draws a one-turn translucent stone
+   * to show which stone was removed by the last rift.
+   */
+  lastRiftedStoneColor?: PlayerColor | null;
   currentPlayer: PlayerColor;
   hoverPosition: Position | null;
   winningLine: Position[] | null;
@@ -70,7 +75,7 @@ export function setupCanvas(canvas: HTMLCanvasElement, cellSize: number, padding
 
 export function renderBoard(ctx: CanvasRenderingContext2D, options: BoardRenderOptions): void {
   const { cellSize, padding, board, pendingPlacements, pendingRift, lastPlacedPositions, 
-          lastRiftedPosition, currentPlayer, hoverPosition, winningLine, winningLineBy,
+          lastRiftedPosition, lastRiftedStoneColor, currentPlayer, hoverPosition, winningLine, winningLineBy,
           invalidPositions, gameEnded } = options;
   const totalSize = cellSize * (BOARD_SIZE - 1) + padding * 2;
   const opponent = currentPlayer === 'black' ? 'white' : 'black';
@@ -136,6 +141,12 @@ export function renderBoard(ctx: CanvasRenderingContext2D, options: BoardRenderO
   if (lastRiftedPosition && !gameEnded) {
     const x = padding + lastRiftedPosition.col * cellSize;
     const y = padding + lastRiftedPosition.row * cellSize;
+
+    // Draw the removed stone as a translucent "ghost" for one turn, matching the scoring-clear style.
+    if (lastRiftedStoneColor) {
+      drawStone(ctx, x, y, lastRiftedStoneColor, cellSize, 0.5);
+    }
+
     ctx.fillStyle = COLORS.koBlocked;
     ctx.beginPath();
     ctx.arc(x, y, cellSize * 0.35, 0, Math.PI * 2);

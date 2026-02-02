@@ -43,6 +43,13 @@
   const AI_ULTRA_TIME_MS = 60000;
   const AI_MIN_TIME_MS = 100;
 
+  function variantBudgetMs(value: unknown): number | null {
+    if (value === 'baseline5s') return 5000;
+    if (value === 'singleUltra60s') return 60000;
+    if (value === 'ultraV2_60s') return 60000;
+    return null;
+  }
+
   function normalizeAiBudgetMs(requested: unknown): number {
     if (requested === 0) return AI_ULTRA_TIME_MS;
     if (typeof requested !== 'number') return AI_HARD_CAP_MS;
@@ -94,8 +101,16 @@
   let aiBudgetMs = $derived.by(() => {
     if (!$aiThinking) return null;
     const state = $gameStore;
-    if (state.gameMode === 'vs-ai') return normalizeAiBudgetMs(state.vsAiMaxTimeMs);
+    if (state.gameMode === 'vs-ai') {
+      const v = variantBudgetMs(state.vsAiVariant);
+      return v ?? normalizeAiBudgetMs(state.vsAiMaxTimeMs);
+    }
     if (state.gameMode === 'ai-vs-ai') {
+      const variant =
+        state.currentPlayer === 'black'
+          ? variantBudgetMs(state.spectateVariantBlack)
+          : variantBudgetMs(state.spectateVariantWhite);
+      if (variant !== null) return variant;
       const requested = state.currentPlayer === 'black' ? state.spectateMaxTimeMsBlack : state.spectateMaxTimeMsWhite;
       return normalizeAiBudgetMs(requested);
     }
@@ -151,8 +166,14 @@
   });
 
   let idleText = $derived.by(() => {
+    if ($aiThinking) {
+      if ($gameStore.gameMode === 'ai-vs-ai') {
+        const who = $gameStore.currentPlayer === 'black' ? 'Black' : 'White';
+        return aiTimeLeftText ? `${who} thinking... ${aiTimeLeftText}` : `${who} thinking...`;
+      }
+      return aiTimeLeftText ? `AI thinking... ${aiTimeLeftText}` : 'AI thinking...';
+    }
     if ($gameStore.gameMode === 'ai-vs-ai') return 'Spectating (AI vs AI)';
-    if ($aiThinking) return aiTimeLeftText ? `AI thinking... ${aiTimeLeftText}` : 'AI thinking...';
     if ($isAiTurn) return 'Opponent\'s turn';
     return 'Your turn';
   });

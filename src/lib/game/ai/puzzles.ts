@@ -11,6 +11,7 @@ import { boardFrom2D, cloneBoard, makeMove, unmakeMove, getWinnerAfterMove, vali
 import { findBestMove } from './search';
 import { threatSpaceSearch } from './tss';
 import { findWinningPositions } from './threats';
+import { countPatterns } from './patterns';
 import { generateAllMoves } from './moveGen';
 import { toIndex, toPosition, isSingleWinMove } from './utils';
 
@@ -381,6 +382,39 @@ export function runTacticalPuzzles(timeLimitMs: number = 250): PuzzleRunSummary 
         unmakeMove(board, undo, BLACK);
         if (winner === WHITE) {
           return { ok: false, details: 'Move should not immediately lose to exact-5 after rift/reinforce.' };
+        }
+        return { ok: true };
+      },
+    },
+    {
+      name: 'Edge-truncated diagonal: do not treat 4-length diagonals as threats (uncompletable exact-5)',
+      toMove: BLACK,
+      board: (() => {
+        const g = emptyGrid();
+        // Black has a diagonal "three" along a corner-truncated diagonal of length 4:
+        // (0,11)-(1,12)-(2,13)-[3,14]. It can never become an exact-5 line.
+        place(g, 'black', 0, 11);
+        place(g, 'black', 1, 12);
+        place(g, 'black', 2, 13);
+        return g;
+      })(),
+      assert: (board) => {
+        const p = countPatterns(board, BLACK);
+        const total =
+          p.FIVE +
+          p.OPEN_FOUR +
+          p.HALF_FOUR +
+          p.GAP_FOUR +
+          p.OPEN_THREE +
+          p.HALF_THREE +
+          p.GAP_THREE +
+          p.OPEN_TWO +
+          p.HALF_TWO;
+        if (total !== 0) {
+          return {
+            ok: false,
+            details: `Expected zero patterns (line cannot ever score exact-5), got: ${JSON.stringify(p)}`,
+          };
         }
         return { ok: true };
       },

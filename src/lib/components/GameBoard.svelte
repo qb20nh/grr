@@ -4,8 +4,7 @@
   import { isReplaying, replayBoard, replayHighlights, replayInvalidPositions, replayPlayerToMove } from '$lib/stores/replayStore';
   import { gameEngine, isFastMode } from '$lib/game/engine';
   import { setupCanvas, renderBoard, getCursorStyle } from '$lib/utils/canvas';
-  import type { Position, PlayerColor } from '$lib/game/types';
-  import { BOARD_SIZE } from '$lib/game/types';
+  import { BOARD_SIZE, getOpponent, type Position, type PlayerColor } from '$lib/game/types';
 
   const MIN_CELL_SIZE = 22;
   const MAX_CELL_SIZE = 36;
@@ -138,6 +137,7 @@
         pendingRift: null,
         lastPlacedPositions: highlights.placed,
         lastRiftedPosition: highlights.removed,
+        lastRiftedStoneColor: highlights.removed ? currentPlayer : null,
         currentPlayer,
         hoverPosition: null,
         winningLine: highlights.winningLine,
@@ -156,6 +156,14 @@
         const lastMove = state.moveHistory[state.moveHistory.length - 1];
         winningLineBy = lastMove.scoredBy ?? lastMove.player;
       }
+
+      let lastRiftedStoneColor: PlayerColor | null = null;
+      if (state.lastRiftedPosition && state.moveHistory.length > 0) {
+        const lastMove = state.moveHistory[state.moveHistory.length - 1];
+        if (lastMove.action === 'rift') {
+          lastRiftedStoneColor = getOpponent(lastMove.player);
+        }
+      }
       
       renderBoard(ctx, {
         cellSize,
@@ -165,6 +173,7 @@
         pendingRift: state.pendingRift,
         lastPlacedPositions: state.lastPlacedPositions,
         lastRiftedPosition: state.lastRiftedPosition,
+        lastRiftedStoneColor,
         currentPlayer: state.currentPlayer,
         hoverPosition: showHover ? hoverPosition : null,
         winningLine: state.winningLine,

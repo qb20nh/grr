@@ -7,6 +7,7 @@ export type GamePhase = 'menu' | 'playing' | 'ended' | 'replay';
 export type ScoreToWin = 0 | 1 | 3 | 5;
 export type EndReason = 'score' | 'resign' | 'exhaustion' | null;
 export type OpeningPreset = 'long-pro' | 'standard-empty' | 'legacy-black-center-white-first';
+export type AiVariant = 'baseline5s' | 'singleUltra60s' | 'ultraV2_60s';
 
 export interface Position {
   row: number;
@@ -34,6 +35,13 @@ export interface GameState {
   endReason: EndReason;
   gameMode: GameMode;
   aiColor: PlayerColor | null;
+  /**
+   * Optional explicit AI variants. When null, the engine uses the configured time budgets
+   * with the baseline single-thread search.
+   */
+  vsAiVariant: AiVariant | null;
+  spectateVariantBlack: AiVariant | null;
+  spectateVariantWhite: AiVariant | null;
   vsAiMaxTimeMs: number;
   spectateMaxTimeMsBlack: number;
   spectateMaxTimeMsWhite: number;

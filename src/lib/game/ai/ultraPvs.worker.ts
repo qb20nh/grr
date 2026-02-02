@@ -9,6 +9,7 @@ import {
   BOARD_SIZE,
   boardFrom2D,
   cloneBoard,
+  clearMoveOrdering,
   getOpponent,
   makeMove,
   BLACK,
@@ -159,6 +160,12 @@ self.onmessage = (e: MessageEvent) => {
     const { board, player } = convertState(msg.state);
     rootBoard = board;
     rootPlayer = player;
+    // Age the shared TT once per new root position so stale entries become replaceable.
+    // Without this, the shared table can get “stuck” with deep entries from old positions
+    // and refuse to store new ones, severely weakening UltraThink over longer games.
+    tt?.newSearch();
+    // Match normal search behavior: clear killer/history between positions.
+    clearMoveOrdering();
     rootScores = normalizeScores(msg.state.scores);
     rootScoreToWin = normalizeScoreToWin(msg.state.scoreToWin);
     // Long Pro lookahead: when root is White on moveIndex=1, Black's immediate reply (moveIndex=2)

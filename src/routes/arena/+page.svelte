@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { resolve } from '$app/paths';
   import { BOARD_SIZE } from '$lib/game/types';
-  import type { Position } from '$lib/game/types';
+  import type { AiVariant, Position } from '$lib/game/types';
 
   type Winner = 'black' | 'white' | null;
 
@@ -45,7 +45,11 @@
     sessions: number;
     cols: number;
     rows: number;
-    timeMs: number;
+    timeMsBlack: number;
+    timeMsWhite: number;
+    variantBlack: AiVariant | null;
+    variantWhite: AiVariant | null;
+    swapHalf: boolean;
     opening: string;
     score: number;
     arena: boolean;
@@ -57,7 +61,11 @@
     sessions: 16,
     cols: 4,
     rows: 4,
-    timeMs: 1000,
+    timeMsBlack: 1000,
+    timeMsWhite: 1000,
+    variantBlack: null,
+    variantWhite: null,
+    swapHalf: false,
     opening: 'long-pro',
     score: 1,
     arena: true,
@@ -73,6 +81,7 @@
   let blackWins = $state(0);
   let whiteWins = $state(0);
   let draws = $state(0);
+  let nowMs = $state<number>(Date.now());
 
   const completed = new Set<number>();
   let nextGlobalIndex = 0;
@@ -190,10 +199,46 @@
     return d.toISOString().replaceAll(':', '-');
   }
 
+  function formatEta(ms: number): string {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const s = totalSeconds % 60;
+    const totalMinutes = Math.floor(totalSeconds / 60);
+    const m = totalMinutes % 60;
+    const h = Math.floor(totalMinutes / 60);
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+
+  const etaText = $derived.by((): string => {
+    if (done) return 'ETA: 0:00';
+    const total = Math.max(0, Math.floor(config.matches));
+    const completedCount = results.length;
+    const remaining = total - completedCount;
+    if (remaining <= 0) return 'ETA: 0:00';
+    const elapsedMs = nowMs - startedAt;
+    if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return 'ETA: --';
+    // Avoid noisy early ETAs.
+    if (completedCount < Math.min(8, total)) return 'ETA: --';
+    const rate = completedCount / elapsedMs; // matches per ms
+    if (!Number.isFinite(rate) || rate <= 0) return 'ETA: --';
+    const etaMs = remaining / rate;
+    if (!Number.isFinite(etaMs) || etaMs <= 0) return 'ETA: --';
+    return `ETA: ${formatEta(etaMs)}`;
+  });
+
   function buildSuggestedFilename(): string {
     const stamp = isoStampForFilename(new Date(finishedAt ?? Date.now()));
+    const variantTag =
+      config.variantBlack || config.variantWhite
+        ? `vb${config.variantBlack ?? 'time'}_vw${config.variantWhite ?? 'time'}`
+        : null;
+    const timeTag =
+      config.swapHalf || config.timeMsBlack !== config.timeMsWhite
+        ? `tb${config.timeMsBlack}_tw${config.timeMsWhite}${config.swapHalf ? '_swapHalf' : ''}`
+        : `t${config.timeMsBlack}`;
+    const tag = variantTag ? `${variantTag}_${timeTag}` : timeTag;
     return sanitizeFilename(
-      `grr_${config.opening}_${config.matches}m_${config.sessions}s_${config.cols}x${config.rows}_score${config.score}_t${config.timeMs}_${stamp}.json`
+      `grr_${config.opening}_${config.matches}m_${config.sessions}s_${config.cols}x${config.rows}_score${config.score}_${tag}_${stamp}.json`
     );
   }
 
@@ -210,11 +255,22 @@
   function parseConfigFromLocation(): ArenaConfig {
     const p = new URLSearchParams(window.location.search);
 
+    const normalizeVariant = (value: string | null): AiVariant | null => {
+      if (value === 'baseline5s' || value === 'singleUltra60s' || value === 'ultraV2_60s') return value;
+      return null;
+    };
+
     const matches = clampInt(Number(p.get('matches') ?? defaults.matches), 1, 1_000_000);
     const sessions = clampInt(Number(p.get('sessions') ?? defaults.sessions), 1, 256);
     const cols = clampInt(Number(p.get('cols') ?? defaults.cols), 1, 16);
     const rows = clampInt(Number(p.get('rows') ?? defaults.rows), 1, 64);
-    const timeMs = clampInt(Number(p.get('time') ?? defaults.timeMs), 0, 60_000);
+    const timeBase = clampInt(Number(p.get('time') ?? defaults.timeMsBlack), 0, 60_000);
+    const timeMsBlack = clampInt(Number(p.get('timeBlack') ?? timeBase), 0, 60_000);
+    const timeMsWhite = clampInt(Number(p.get('timeWhite') ?? timeBase), 0, 60_000);
+    const variantBlack = normalizeVariant(p.get('variantBlack'));
+    const variantWhite = normalizeVariant(p.get('variantWhite'));
+    const swapHalfRaw = p.get('swapHalf');
+    const swapHalf = swapHalfRaw === '1' || swapHalfRaw === 'true';
     const opening = String(p.get('opening') ?? defaults.opening);
     const score = clampInt(Number(p.get('score') ?? defaults.score), 0, 99);
     const arenaRaw = p.get('arena');
@@ -231,19 +287,61 @@
       finalRows = Math.ceil(sessions / finalCols);
     }
 
-    return { matches, sessions, cols: finalCols, rows: finalRows, timeMs, opening, score, arena, scale };
+    return {
+      matches,
+      sessions,
+      cols: finalCols,
+      rows: finalRows,
+      timeMsBlack,
+      timeMsWhite,
+      variantBlack,
+      variantWhite,
+      swapHalf,
+      opening,
+      score,
+      arena,
+      scale,
+    };
+  }
+
+  function getSidesForMatch(globalIndex: number): {
+    blackMs: number;
+    whiteMs: number;
+    variantBlack: AiVariant | null;
+    variantWhite: AiVariant | null;
+  } {
+    let blackMs = config.timeMsBlack;
+    let whiteMs = config.timeMsWhite;
+    let variantBlack = config.variantBlack;
+    let variantWhite = config.variantWhite;
+    if (config.swapHalf) {
+      const half = Math.floor(config.matches / 2);
+      if (globalIndex >= half) {
+        const tmp = blackMs;
+        blackMs = whiteMs;
+        whiteMs = tmp;
+        const tmpVar = variantBlack;
+        variantBlack = variantWhite;
+        variantWhite = tmpVar;
+      }
+    }
+    return { blackMs, whiteMs, variantBlack, variantWhite };
   }
 
   function buildGameUrl(sessionId: number, globalIndex: number): string {
+    const { blackMs, whiteMs, variantBlack, variantWhite } = getSidesForMatch(globalIndex);
     const params = new URLSearchParams({
       mode: 'spectate',
-      time: String(config.timeMs),
+      timeBlack: String(blackMs),
+      timeWhite: String(whiteMs),
       opening: config.opening,
       score: String(config.score),
       arena: config.arena ? 'true' : 'false',
       session: String(sessionId),
       match: String(globalIndex),
     });
+    if (variantBlack) params.set('variantBlack', variantBlack);
+    if (variantWhite) params.set('variantWhite', variantWhite);
     // Respect SvelteKit base path (e.g. `/grr` in preview builds) without using the deprecated `base`.
     const root = resolve('/');
     const withSlash = root.endsWith('/') ? root : `${root}/`;
@@ -274,10 +372,17 @@
   }
 
   function buildPayload(): unknown {
+    const thinkingTimeMs =
+      !config.swapHalf && config.timeMsBlack === config.timeMsWhite ? config.timeMsBlack : null;
     return {
       config: {
         opening: config.opening,
-        thinkingTimeMs: config.timeMs,
+        thinkingTimeMs,
+        thinkingTimeMsBlack: config.timeMsBlack,
+        thinkingTimeMsWhite: config.timeMsWhite,
+        variantBlack: config.variantBlack,
+        variantWhite: config.variantWhite,
+        swapHalf: config.swapHalf,
         totalMatches: config.matches,
         sessions: config.sessions,
         cols: config.cols,
@@ -498,8 +603,14 @@
     };
     window.addEventListener('message', handler);
 
+    const interval = window.setInterval(() => {
+      // Update once per second for ETA.
+      nowMs = Date.now();
+    }, 1000);
+
     return () => {
       window.removeEventListener('message', handler);
+      clearInterval(interval);
     };
   });
 </script>
@@ -515,6 +626,7 @@
       <span> B:{blackWins}</span>
       <span> W:{whiteWins}</span>
       <span> D:{draws}</span>
+      <span class="mono eta">{etaText}</span>
       {#if done}
         <span class="done">done</span>
       {/if}
@@ -599,6 +711,11 @@
     color: var(--text-secondary);
     font-size: 12px;
     flex: 1;
+    flex-wrap: wrap;
+  }
+
+  .eta {
+    color: var(--text-secondary);
   }
 
   .done {

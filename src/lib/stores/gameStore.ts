@@ -1,5 +1,5 @@
 import { writable, derived, get } from 'svelte/store';
-import type { GameState, Position, GameMode, Action, PlayerColor, GamePhase, ScoreToWin, EndReason, OpeningPreset, MoveRecord } from '$lib/game/types';
+import type { GameState, Position, GameMode, Action, PlayerColor, GamePhase, ScoreToWin, EndReason, OpeningPreset, MoveRecord, AiVariant } from '$lib/game/types';
 import { createInitialBoard, getOpeningFirstPlayer, BOARD_SIZE } from '$lib/game/types';
 import { flattenUniquePositions } from '$lib/game/scoredLines';
 import { wouldScoreWithSingleStone } from '$lib/game/validator';
@@ -50,6 +50,9 @@ function createInitialState(openingPreset: OpeningPreset = 'long-pro'): GameStat
     endReason: null,
     gameMode: 'local',
     aiColor: null,
+    vsAiVariant: null,
+    spectateVariantBlack: null,
+    spectateVariantWhite: null,
     vsAiMaxTimeMs: 5000,
     spectateMaxTimeMsBlack: 5000,
     spectateMaxTimeMsWhite: 5000,
@@ -76,24 +79,91 @@ function createGameStore() {
     return fallback;
   }
 
+  function normalizeAiVariant(value: unknown): AiVariant | null {
+    if (value === 'baseline5s' || value === 'singleUltra60s' || value === 'ultraV2_60s') {
+      return value;
+    }
+    return null;
+  }
+
+  function variantTimeMs(variant: AiVariant): number {
+    if (variant === 'baseline5s') return 5000;
+    // Both 60s variants use a 60s per-move budget; the algorithm differs.
+    return 60000;
+  }
+
   function startGame(mode: 'local', scoreToWin?: ScoreToWin): void;
   function startGame(mode: 'local', scoreToWin?: ScoreToWin, openingPreset?: OpeningPreset): void;
-  function startGame(mode: 'vs-ai', playerColor: PlayerColor, scoreToWin?: ScoreToWin, aiMaxTimeMs?: number, openingPreset?: OpeningPreset): void;
-  function startGame(mode: 'ai-vs-ai', blackMaxTimeMs?: number, whiteMaxTimeMs?: number, scoreToWin?: ScoreToWin, openingPreset?: OpeningPreset): void;
-  function startGame(mode: GameMode, arg1?: unknown, arg2?: unknown, arg3?: unknown, arg4?: unknown): void {
+  function startGame(
+    mode: 'vs-ai',
+    playerColor: PlayerColor,
+    scoreToWin?: ScoreToWin,
+    aiMaxTimeMs?: number,
+    openingPreset?: OpeningPreset,
+    aiVariant?: AiVariant
+  ): void;
+  function startGame(
+    mode: 'ai-vs-ai',
+    blackMaxTimeMs?: number,
+    whiteMaxTimeMs?: number,
+    scoreToWin?: ScoreToWin,
+    openingPreset?: OpeningPreset,
+    variantBlack?: AiVariant,
+    variantWhite?: AiVariant
+  ): void;
+  function startGame(
+    mode: GameMode,
+    arg1?: unknown,
+    arg2?: unknown,
+    arg3?: unknown,
+    arg4?: unknown,
+    arg5?: unknown,
+    arg6?: unknown
+  ): void {
     // AI color is opposite of player's color
     const aiColor =
       mode === 'vs-ai'
         ? ((typeof arg1 === 'string' ? arg1 : 'black') === 'black' ? 'white' : 'black')
         : null;
 
+    const requestedVsAiTimeMs = mode === 'vs-ai' ? normalizeAiTimeMs(arg3, 5000) : 5000;
+    const requestedVsAiVariant = mode === 'vs-ai' ? normalizeAiVariant(arg5) : null;
+    const vsAiVariant: AiVariant | null =
+      mode === 'vs-ai'
+        ? (requestedVsAiVariant ??
+            (requestedVsAiTimeMs === 0 ? 'ultraV2_60s' : null))
+        : null;
     const vsAiMaxTimeMs =
-      mode === 'vs-ai' ? normalizeAiTimeMs(arg3, 5000) : 5000;
+      mode === 'vs-ai'
+        ? (vsAiVariant ? variantTimeMs(vsAiVariant) : requestedVsAiTimeMs)
+        : 5000;
+
+    const requestedSpectateTimeMsBlack =
+      mode === 'ai-vs-ai' ? normalizeAiTimeMs(arg1, 5000) : 5000;
+    const requestedSpectateTimeMsWhite =
+      mode === 'ai-vs-ai' ? normalizeAiTimeMs(arg2 ?? arg1, 5000) : 5000;
+    const requestedSpectateVariantBlack = mode === 'ai-vs-ai' ? normalizeAiVariant(arg5) : null;
+    const requestedSpectateVariantWhite = mode === 'ai-vs-ai' ? normalizeAiVariant(arg6) : null;
+
+    const spectateVariantBlack: AiVariant | null =
+      mode === 'ai-vs-ai'
+        ? (requestedSpectateVariantBlack ??
+            (requestedSpectateTimeMsBlack === 0 ? 'ultraV2_60s' : null))
+        : null;
+    const spectateVariantWhite: AiVariant | null =
+      mode === 'ai-vs-ai'
+        ? (requestedSpectateVariantWhite ??
+            (requestedSpectateTimeMsWhite === 0 ? 'ultraV2_60s' : null))
+        : null;
 
     const spectateMaxTimeMsBlack =
-      mode === 'ai-vs-ai' ? normalizeAiTimeMs(arg1, 5000) : 5000;
+      mode === 'ai-vs-ai'
+        ? (spectateVariantBlack ? variantTimeMs(spectateVariantBlack) : requestedSpectateTimeMsBlack)
+        : 5000;
     const spectateMaxTimeMsWhite =
-      mode === 'ai-vs-ai' ? normalizeAiTimeMs(arg2 ?? arg1, 5000) : 5000;
+      mode === 'ai-vs-ai'
+        ? (spectateVariantWhite ? variantTimeMs(spectateVariantWhite) : requestedSpectateTimeMsWhite)
+        : 5000;
 
     const scoreToWin: ScoreToWin =
       mode === 'local'
@@ -117,6 +187,9 @@ function createGameStore() {
       ...createInitialState(openingPreset),
       gameMode: mode,
       aiColor,
+      vsAiVariant,
+      spectateVariantBlack,
+      spectateVariantWhite,
       vsAiMaxTimeMs,
       spectateMaxTimeMsBlack,
       spectateMaxTimeMsWhite,
@@ -143,6 +216,9 @@ function createGameStore() {
         ...createInitialState(state.openingPreset),
         gameMode: state.gameMode,
         aiColor: state.aiColor,
+        vsAiVariant: state.vsAiVariant,
+        spectateVariantBlack: state.spectateVariantBlack,
+        spectateVariantWhite: state.spectateVariantWhite,
         vsAiMaxTimeMs: state.vsAiMaxTimeMs,
         spectateMaxTimeMsBlack: state.spectateMaxTimeMsBlack,
         spectateMaxTimeMsWhite: state.spectateMaxTimeMsWhite,

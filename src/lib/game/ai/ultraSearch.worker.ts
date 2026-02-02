@@ -123,9 +123,10 @@ function pickBetter(
 ): { move: Move; score: number; depth: number; nodes: number } | null {
   if (!a) return b;
   if (!b) return a;
-  // Prefer deeper results; tie-break by score.
-  if (b.depth !== a.depth) return b.depth > a.depth ? b : a;
+  // Prefer higher score; tie-break by depth.
+  // Depth-first selection can pick "easy to search but bad" moves over better ones.
   if (b.score !== a.score) return b.score > a.score ? b : a;
+  if (b.depth !== a.depth) return b.depth > a.depth ? b : a;
   return a;
 }
 
