@@ -28,18 +28,22 @@ export interface LineInfo {
 
 const NO_POS: CellIndex = -1;
 
-function stepsToEdge(row: number, col: number, dr: number, dc: number): number {
-  // How many steps can we take from (row,col) in direction (dr,dc) before leaving the board?
-  // (dr,dc) are always in {-1,0,1} in this engine.
-  const rowSteps = dr === 0 ? 99 : dr > 0 ? (BOARD_SIZE - 1 - row) : row;
-  const colSteps = dc === 0 ? 99 : dc > 0 ? (BOARD_SIZE - 1 - col) : col;
-  return Math.min(rowSteps, colSteps);
-}
-
-function maxInBoundsLineLength(row: number, col: number, dr: number, dc: number): number {
-  // Total number of in-bounds cells on the full line through (row,col) in direction (dr,dc).
-  // If this is < 5, an exact-5 score is impossible on this line, regardless of play.
-  return 1 + stepsToEdge(row, col, dr, dc) + stepsToEdge(row, col, -dr, -dc);
+// Board geometry is immutable; avoid row/column division, bounds checks, and
+// two temporary scan objects on every pattern lookup.
+const FORWARD_STEPS = new Uint8Array(BOARD_CELLS * 4);
+const BACKWARD_STEPS = new Uint8Array(BOARD_CELLS * 4);
+const LINE_OFFSETS = DIRECTIONS.map(([dr, dc]) => dr * BOARD_SIZE + dc);
+for (let pos = 0; pos < BOARD_CELLS; pos++) {
+  const row = Math.floor(pos / BOARD_SIZE), col = pos % BOARD_SIZE;
+  for (let dir = 0; dir < 4; dir++) {
+    const [dr, dc] = DIRECTIONS[dir];
+    const steps = (r: number, c: number): number => Math.min(
+      r === 0 ? BOARD_SIZE : r > 0 ? BOARD_SIZE - 1 - row : row,
+      c === 0 ? BOARD_SIZE : c > 0 ? BOARD_SIZE - 1 - col : col
+    );
+    FORWARD_STEPS[pos * 4 + dir] = steps(dr, dc);
+    BACKWARD_STEPS[pos * 4 + dir] = steps(-dr, -dc);
+  }
 }
 
 function rankFor(count: number, openEnds: number, gaps: number): number {
@@ -84,58 +88,36 @@ export function scanLine(
   player: Color,
   ignoreKo: boolean = false
 ): LineInfo {
-  const [dRow, dCol] = DIRECTIONS[dirIdx];
-  const startRow = Math.floor(pos / BOARD_SIZE);
-  const startCol = pos % BOARD_SIZE;
+  const geometry = pos * 4 + dirIdx;
+  const forward = FORWARD_STEPS[geometry];
+  const backward = BACKWARD_STEPS[geometry];
+  const offset = LINE_OFFSETS[dirIdx];
+  const cells = board.cells;
+  const ko = ignoreKo ? -1 : board.koPosition;
 
-  // If the board edge makes an exact-5 impossible on this line (e.g. short diagonals near corners),
-  // treat it as pattern-less. This prevents the eval from chasing "dead" lines that can never score.
-  if (maxInBoundsLineLength(startRow, startCol, dRow, dCol) < 5) {
-    return {
-      count: 1,
-      openEnds: 0,
-      gaps: 0,
-      gapPos: NO_POS,
-      extendCount: 0,
-      extend1: NO_POS,
-      extend2: NO_POS,
-    };
+  // Short edge diagonals cannot ever score an exact five.
+  if (1 + forward + backward < 5) {
+    return { count: 1, openEnds: 0, gaps: 0, gapPos: NO_POS,
+      extendCount: 0, extend1: NO_POS, extend2: NO_POS };
   }
 
-  const isOpenForPlacement = (idx: CellIndex): boolean =>
-    board.cells[idx] === EMPTY && (ignoreKo || board.koPosition !== idx);
-
-  const maxRun = 6; // enough to detect overline/long lines cheaply
-
-  // Scan consecutive stones in a direction until blocked or maxRun reached.
-  function scanConsecutive(
-    dr: number,
-    dc: number
-  ): { count: number; endRow: number; endCol: number } {
-    let count = 0;
-    let r = startRow + dr;
-    let c = startCol + dc;
-
-    while (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE && board.cells[r * BOARD_SIZE + c] === player && count < maxRun) {
-      count++;
-      r += dr;
-      c += dc;
-    }
-
-    return { count, endRow: r, endCol: c }; // first non-player (or OOB)
+  const maxRun = 6; // enough to reject overlines
+  let leftCount = 0, rightCount = 0;
+  let leftEndIdx = pos - offset, rightEndIdx = pos + offset;
+  while (leftCount < backward && leftCount < maxRun && cells[leftEndIdx] === player) {
+    leftCount++;
+    leftEndIdx -= offset;
   }
-
-  const left = scanConsecutive(-dRow, -dCol);
-  const right = scanConsecutive(dRow, dCol);
-
-  const leftEndIdx = inBounds(left.endRow, left.endCol) ? toIndex(left.endRow, left.endCol) : NO_POS;
-  const rightEndIdx = inBounds(right.endRow, right.endCol) ? toIndex(right.endRow, right.endCol) : NO_POS;
-
-  const leftOpen = leftEndIdx !== NO_POS && isOpenForPlacement(leftEndIdx);
-  const rightOpen = rightEndIdx !== NO_POS && isOpenForPlacement(rightEndIdx);
+  while (rightCount < forward && rightCount < maxRun && cells[rightEndIdx] === player) {
+    rightCount++;
+    rightEndIdx += offset;
+  }
+  const leftOpen = leftCount < backward && cells[leftEndIdx] === EMPTY && ko !== leftEndIdx;
+  const rightOpen = rightCount < forward && cells[rightEndIdx] === EMPTY && ko !== rightEndIdx;
 
   // Base (no gap) variant.
-  let bestCount = left.count + 1 + right.count;
+  const contiguousCount = leftCount + 1 + rightCount;
+  let bestCount = contiguousCount;
   let bestOpenEnds = (leftOpen ? 1 : 0) + (rightOpen ? 1 : 0);
   let bestGaps = 0;
   let bestGapPos: CellIndex = NO_POS;
@@ -161,26 +143,17 @@ export function scanLine(
 
   // Right-gap: ... [stones] _ [stones]
   if (rightOpen) {
-    const gapRow = right.endRow;
-    const gapCol = right.endCol;
-    const afterGapRow = gapRow + dRow;
-    const afterGapCol = gapCol + dCol;
-
-    if (inBounds(afterGapRow, afterGapCol) && board.cells[afterGapRow * BOARD_SIZE + afterGapCol] === player) {
-      // Count stones after the gap
-      let afterCount = 1;
-      let r = afterGapRow + dRow;
-      let c = afterGapCol + dCol;
-      while (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE && board.cells[r * BOARD_SIZE + c] === player && afterCount < maxRun) {
+    const remaining = forward - rightCount - 1;
+    let farEndIdx = rightEndIdx + offset;
+    if (remaining > 0 && cells[farEndIdx] === player) {
+      let afterCount = 0;
+      while (afterCount < remaining && afterCount < maxRun && cells[farEndIdx] === player) {
         afterCount++;
-        r += dRow;
-        c += dCol;
+        farEndIdx += offset;
       }
+      const farOpen = afterCount < remaining && cells[farEndIdx] === EMPTY && ko !== farEndIdx;
 
-      const farEndIdx = inBounds(r, c) ? toIndex(r, c) : NO_POS;
-      const farOpen = farEndIdx !== NO_POS && isOpenForPlacement(farEndIdx);
-
-      const vCount = bestCount + afterCount;
+      const vCount = contiguousCount + afterCount;
       const vOpenEnds = (leftOpen ? 1 : 0) + (farOpen ? 1 : 0);
       const vRank = rankFor(vCount, vOpenEnds, 1);
 
@@ -213,25 +186,17 @@ export function scanLine(
 
   // Left-gap: [stones] _ [stones] ...
   if (leftOpen) {
-    const gapRow = left.endRow;
-    const gapCol = left.endCol;
-    const afterGapRow = gapRow - dRow;
-    const afterGapCol = gapCol - dCol;
-
-    if (inBounds(afterGapRow, afterGapCol) && board.cells[afterGapRow * BOARD_SIZE + afterGapCol] === player) {
-      let afterCount = 1;
-      let r = afterGapRow - dRow;
-      let c = afterGapCol - dCol;
-      while (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE && board.cells[r * BOARD_SIZE + c] === player && afterCount < maxRun) {
+    const remaining = backward - leftCount - 1;
+    let farEndIdx = leftEndIdx - offset;
+    if (remaining > 0 && cells[farEndIdx] === player) {
+      let afterCount = 0;
+      while (afterCount < remaining && afterCount < maxRun && cells[farEndIdx] === player) {
         afterCount++;
-        r -= dRow;
-        c -= dCol;
+        farEndIdx -= offset;
       }
+      const farOpen = afterCount < remaining && cells[farEndIdx] === EMPTY && ko !== farEndIdx;
 
-      const farEndIdx = inBounds(r, c) ? toIndex(r, c) : NO_POS;
-      const farOpen = farEndIdx !== NO_POS && isOpenForPlacement(farEndIdx);
-
-      const vCount = bestCount + afterCount;
+      const vCount = contiguousCount + afterCount;
       const vOpenEnds = (farOpen ? 1 : 0) + (rightOpen ? 1 : 0);
       const vRank = rankFor(vCount, vOpenEnds, 1);
 
@@ -341,6 +306,9 @@ export function countPatterns(board: Board, player: Color): PatternCounts {
     if (board.cells[pos] !== player) continue;
     
     for (let dir = 0; dir < 4; dir++) {
+      // Every stone in a contiguous run sees the same pattern. Scan its first
+      // stone once; the existing gap key still deduplicates separated runs.
+      if (BACKWARD_STEPS[pos * 4 + dir] > 0 && board.cells[pos - LINE_OFFSETS[dir]] === player) continue;
       const info = scanLine(board, pos, dir, player);
       if (info.count < 2) continue;
 

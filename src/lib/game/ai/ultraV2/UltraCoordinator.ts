@@ -116,9 +116,16 @@ function pickBetter(
 ): { move: Move; score: number; depth: number; nodes: number } | null {
   if (!a) return b;
   if (!b) return a;
-  if (b.score !== a.score) return b.score > a.score ? b : a;
+  // These workers each search the entire root. A shallow optimistic score must
+  // not overrule a deeper completed analysis of the same position. Proven wins
+  // remain decisive, including TSS proofs which report depth zero.
+  const aWins = a.score >= CONFIG.WIN_SCORE - 10000;
+  const bWins = b.score >= CONFIG.WIN_SCORE - 10000;
+  if (aWins !== bWins) return bWins ? b : a;
+  if (aWins && b.score !== a.score) return b.score > a.score ? b : a;
   if (b.depth !== a.depth) return b.depth > a.depth ? b : a;
-  return Math.random() < 0.5 ? a : b;
+  if (b.score !== a.score) return b.score > a.score ? b : a;
+  return a;
 }
 
 export class UltraCoordinator {

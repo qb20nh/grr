@@ -77,6 +77,15 @@ export class NnueState {
     }
   }
 
+  /** Scoring removes whole lines in addition to the move's own stone changes. */
+  removeStones(positions: readonly CellIndex[], color: Color): void {
+    for (const pos of positions) this.removeFeature(featureIndex(pos, color));
+  }
+
+  restoreStones(positions: readonly CellIndex[], color: Color): void {
+    for (const pos of positions) this.addFeature(featureIndex(pos, color));
+  }
+
   /**
    * Evaluate from the perspective of `toMove`.
    * Returns a value in [-1, 1].

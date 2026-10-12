@@ -3,13 +3,13 @@
  * Generates and filters candidate moves with colinearity constraints
  */
 
-import { BOARD_SIZE, BOARD_CELLS, CONFIG } from './constants';
+import { BOARD_SIZE, BOARD_CELLS, CONFIG, CANDIDATE_NEIGHBORS } from './constants';
 import type { Board, CellIndex, Color, Move, ScoredMove, ReinforceMove, RiftMove } from './types';
 import { EMPTY, BLACK, WHITE } from './types';
-import { getOpponent, createReinforceMove, createSingleWinMove, createRiftMove, isSingleWinMove, toIndex, inBounds } from './utils';
-import { isValidPlacement, checkColinearityConstraint, validateReinforce } from './board';
-import { evaluateSinglePosition, evaluateReinforceMove } from './synergy';
-import { evaluateRiftTarget, findWinningPositions, findWinningPositionsAssumingKoClears, getBlockingMask, riftBreaksThreat } from './threats';
+import { getOpponent, createReinforceMove, createSingleWinMove, createRiftMove, isSingleWinMove, toIndex } from './utils';
+import { isValidPlacement, checkColinearityConstraint, validateReinforce, makeMove, unmakeMove, getWinnerAfterMove } from './board';
+import { evaluateSinglePosition, evaluateReinforceMove, createReinforceScorer } from './synergy';
+import { evaluateRiftTarget, findWinningPositions, findWinningPositionsAssumingKoClears, getBlockingMask } from './threats';
 import type { BlockingMask } from './threats';
 
 export interface MatchContext {
@@ -18,28 +18,59 @@ export interface MatchContext {
   scoreToWin: number;
 }
 
-// Precomputed neighbor lists (radius = CONFIG.CANDIDATE_RADIUS) for fast candidate generation.
-const NEIGHBORS: readonly CellIndex[][] = (() => {
-  const radius = CONFIG.CANDIDATE_RADIUS;
-  const neighbors: CellIndex[][] = Array.from({ length: BOARD_CELLS }, () => []);
-
-  for (let idx = 0; idx < BOARD_CELLS; idx++) {
-    const row = Math.floor(idx / BOARD_SIZE);
-    const col = idx % BOARD_SIZE;
-
-    for (let dr = -radius; dr <= radius; dr++) {
-      for (let dc = -radius; dc <= radius; dc++) {
-        if (dr === 0 && dc === 0) continue;
-        const nr = row + dr;
-        const nc = col + dc;
-        if (!inBounds(nr, nc)) continue;
-        neighbors[idx].push(toIndex(nr, nc));
-      }
+/**
+ * Complete replies to an immediate match-ending threat. A heuristic top-K list
+ * is unsafe here: attractive attacks can crowd out every legal defensive rift.
+ * null means ordinary move generation is needed; [] means no evasion exists.
+ */
+export function generateImmediateResponses(board: Board, player: Color, match?: MatchContext): ScoredMove[] | null {
+  const target = match?.scoreToWin ?? 1;
+  if (target === 0) return null;
+  const ownScore = player === BLACK ? match?.scores.black ?? 0 : match?.scores.white ?? 0;
+  const opponent = getOpponent(player);
+  const opponentScore = opponent === BLACK ? match?.scores.black ?? 0 : match?.scores.white ?? 0;
+  const wins = findWinningPositions(board, player);
+  if (wins.length > 0) {
+    if (ownScore + 1 >= target) {
+      return [{ move: createSingleWinMove(wins[0]), score: CONFIG.INFINITY, orderScore: CONFIG.INFINITY }];
     }
+    // Nonterminal scoring clears stones; let the full match search model that.
+    return null;
+  }
+  if (opponentScore + 1 < target) return null;
+  const threats = findWinningPositionsAssumingKoClears(board, opponent);
+  if (threats.length === 0) return null;
+
+  const responses: ScoredMove[] = [];
+  const scorer = createReinforceScorer(board, player, getBlockingMask(board, player));
+  const addPair = (a: number, b: number): void => {
+    if (!validateReinforce(board, a, b, player)) return;
+    const score = scorer.pair(a, b);
+    responses.push({ move: createReinforceMove(a, b), score, orderScore: score });
+  };
+  if (threats.length === 1) {
+    // Every legal filler matters: remote second stones can create a counterthreat.
+    for (let pos = 0; pos < BOARD_CELLS; pos++) addPair(threats[0], pos);
+  } else if (threats.length === 2) {
+    addPair(threats[0], threats[1]);
   }
 
-  return neighbors;
-})();
+  // Inspect every opposing stone, including low-ranked targets. Removing one
+  // can expose a different exact-five or change the only winning square to Ko.
+  for (let pos = 0; pos < BOARD_CELLS; pos++) {
+    if (board.cells[pos] !== opponent) continue;
+    const move = createRiftMove(pos);
+    const undo = makeMove(board, move, player);
+    const safe = getWinnerAfterMove(board, move, player) !== opponent &&
+      findWinningPositions(board, opponent).length === 0;
+    unmakeMove(board, undo, player);
+    if (!safe) continue;
+    const score = evaluateRiftTarget(board, pos, player);
+    responses.push({ move, score, orderScore: score });
+  }
+  responses.sort((a, b) => b.score - a.score);
+  return responses;
+}
 
 // ---- Scratch masks (avoid Set allocations in hot paths) ----
 const CANDIDATE_SEEN = new Uint32Array(BOARD_CELLS);
@@ -104,7 +135,7 @@ export function getCandidatePositions(board: Board): CellIndex[] {
   for (let i = 0; i < BOARD_CELLS; i++) {
     if (board.cells[i] === EMPTY) continue;
 
-    for (const idx of NEIGHBORS[i]) {
+    for (const idx of CANDIDATE_NEIGHBORS[i]) {
       // Fast placement check (idx already in-bounds).
       if (board.cells[idx] !== EMPTY) continue;
       if (board.koPosition === idx) continue;
@@ -170,6 +201,12 @@ export function generateReinforceMoves(
   const playerOnMatchPoint = scoreToWin !== 0 && playerScore + 1 >= scoreToWin;
   const opponentOnMatchPoint = scoreToWin !== 0 && opponentScore + 1 >= scoreToWin;
 
+  // A match-ending single needs no candidate scoring or pair enumeration.
+  const scoringPositions = findWinningPositions(board, player);
+  if (playerOnMatchPoint && scoringPositions.length > 0) {
+    return [{ move: createSingleWinMove(scoringPositions[0]), score: CONFIG.INFINITY, orderScore: CONFIG.INFINITY }];
+  }
+
   const blocking = getBlockingMask(board, player, false);
 
   // Materialize blocking positions once (used for must-block and bonuses).
@@ -178,35 +215,24 @@ export function generateReinforceMoves(
     if (blocking.mask[i] === blocking.stamp) blockingPositions.push(i);
   }
 
+  const scorer = createReinforceScorer(board, player, blocking);
   const candidates = getCandidatePositions(board);
-  const scoredCandidates = scoreCandidates(board, candidates, player, blocking);
+  const scoredCandidates = candidates.map(pos => ({ pos, score: scorer.single(pos) }));
+  scoredCandidates.sort((a, b) => b.score - a.score);
   
   // Take top candidates for pair generation
   const topCandidates = scoredCandidates.slice(0, 25);
   
   const moves: ScoredMove[] = [];
   
-  // Single-stone scoring moves (legal only when they score).
-  const scoringPositions = findWinningPositions(board, player);
+  // Nonterminal scoring singles remain candidates in multi-point matches.
   if (scoringPositions.length > 0) {
-    // If scoring ends the match, we can treat it as an immediate win (root will terminate).
-    if (playerOnMatchPoint) {
-      const winPos = scoringPositions[0];
-      return [
-        {
-          move: createSingleWinMove(winPos),
-          score: CONFIG.INFINITY,
-          orderScore: CONFIG.INFINITY,
-        },
-      ];
-    }
-
     // Otherwise, include a few scoring singles as high-value candidates (ordering only).
     // Keep this conservative: search should decide whether “taking a point” is worth it.
     const SCORE_BONUS = 120000;
     const scoredSingles = scoringPositions.map(pos => ({
       pos,
-      score: evaluateSinglePosition(board, pos, player, blocking) + SCORE_BONUS,
+      score: scorer.single(pos) + SCORE_BONUS,
     }));
     scoredSingles.sort((a, b) => b.score - a.score);
     const topSingles = scoredSingles.slice(0, 6);
@@ -252,7 +278,7 @@ export function generateReinforceMoves(
         if (!isValidPlacement(board, blockPos2)) continue;
         if (!checkColinearityConstraint(board, blockPos, blockPos2, player)) continue;
         
-        const score = evaluateReinforceMove(board, blockPos, blockPos2, player, blocking);
+        const score = scorer.pair(blockPos, blockPos2);
         moves.push({
           move: createReinforceMove(blockPos, blockPos2),
           score: score + 500000, // HUGE bonus for double block
@@ -265,7 +291,7 @@ export function generateReinforceMoves(
         if (cand.pos === blockPos) continue;
         if (!checkColinearityConstraint(board, blockPos, cand.pos, player)) continue;
         
-        const score = evaluateReinforceMove(board, blockPos, cand.pos, player, blocking);
+        const score = scorer.pair(blockPos, cand.pos);
         moves.push({
           move: createReinforceMove(blockPos, cand.pos),
           score: score + 300000, // Large bonus for blocking
@@ -287,7 +313,7 @@ export function generateReinforceMoves(
       }
       
       // Score the pair
-      const score = evaluateReinforceMove(board, pos1, pos2, player, blocking);
+      const score = scorer.pair(pos1, pos2);
       
       // Bonus if one or both are blocking moves
       let finalScore = score;
@@ -389,6 +415,8 @@ export function generateAllMoves(
   player: Color,
   match?: MatchContext
 ): ScoredMove[] {
+  const responses = generateImmediateResponses(board, player, match);
+  if (responses && responses.length > 0) return responses;
   const reinforceMoves = generateReinforceMoves(board, player, match);
   const riftMoves = generateRiftMoves(board, player, match);
 
@@ -424,77 +452,26 @@ export function generateTacticalMoves(
   player: Color,
   match?: MatchContext
 ): ScoredMove[] {
+  const responses = generateImmediateResponses(board, player, match);
+  if (responses !== null) return responses;
   const opponent = getOpponent(player);
-  const scores = match?.scores ?? { black: 0, white: 0 };
-  const scoreToWin = match?.scoreToWin ?? 1;
-  const playerScore = player === BLACK ? scores.black : scores.white;
-  const playerOnMatchPoint = scoreToWin !== 0 && playerScore + 1 >= scoreToWin;
-  
-  // 1. Match-ending scoring moves
-  const winningPositions = findWinningPositions(board, player);
-  if (playerOnMatchPoint && winningPositions.length > 0) {
-    // Scoring ends the match; no need to consider others.
-    return [{ move: createSingleWinMove(winningPositions[0]), score: CONFIG.INFINITY }];
-  }
-
-  // 2) Threat-driven tactical move set (for quiescence):
-  // - Direct blocks of opponent (Ko-clears) win squares
-  // - Any move using known blocking squares (pattern-based critical defense)
-  // - High-impact rifts that break threats
-  const opponentWinSquares = findWinningPositionsAssumingKoClears(board, opponent);
-  // Ko is temporary; for quiescence we want blocks that remain relevant once Ko clears.
-  const blocking = getBlockingMask(board, player, true);
-
-  const isBlockingSquare = (pos: CellIndex): boolean => blocking.mask[pos] === blocking.stamp;
-  // opponentWinSquares is typically tiny (often 0-2); a linear scan beats allocating a Set.
-  const isDirectWinBlock = (pos: CellIndex): boolean => {
-    for (let i = 0; i < opponentWinSquares.length; i++) {
-      if (opponentWinSquares[i] === pos) return true;
-    }
-    return false;
-  };
-
+  const defending = findWinningPositionsAssumingKoClears(board, opponent).length > 0;
+  const candidates = [...generateReinforceMoves(board, player, match), ...generateRiftMoves(board, player, match)];
   const tactical: ScoredMove[] = [];
-
-  // Reinforce candidates are already bounded to CONFIG.MAX_PAIRS and ordered by heuristic score.
-  const reinforceMoves = generateReinforceMoves(board, player, match);
-  for (const m of reinforceMoves) {
-    const mv = m.move;
-    if (mv.action !== 'reinforce') continue;
-
-    const p1 = mv.pos1;
-    const p2 = isSingleWinMove(mv) ? null : (mv as ReinforceMove).pos2;
-
-    if (isDirectWinBlock(p1) || (p2 !== null && isDirectWinBlock(p2))) {
-      tactical.push(m);
-      continue;
-    }
-    if (isBlockingSquare(p1) || (p2 !== null && isBlockingSquare(p2))) {
-      tactical.push(m);
-      continue;
-    }
-    // Heuristic fallback: very high-scoring reinforce moves tend to be threat-creating.
-    if (m.score >= 100000) {
-      tactical.push(m);
-    }
+  for (const candidate of candidates) {
+    const undo = makeMove(board, candidate.move, player);
+    const winner = getWinnerAfterMove(board, candidate.move, player);
+    const forcing = winner === player || (winner === null &&
+      (findWinningPositionsAssumingKoClears(board, player).length > 0 ||
+        (defending && findWinningPositions(board, opponent).length === 0)));
+    unmakeMove(board, undo, player);
+    if (forcing) tactical.push(candidate);
   }
-
-  // Rift candidates (bounded to CONFIG.MAX_RIFTS).
-  const riftMoves = generateRiftMoves(board, player, match);
-  for (const rm of riftMoves) {
-    const rpos = (rm.move as RiftMove).pos;
-    if (rm.score >= 50000 || riftBreaksThreat(board, rpos, player)) {
-      tactical.push(rm);
-    }
-  }
-
-  // Safety: if our threat-driven filter yields nothing, fall back to a small top slice.
-  if (tactical.length === 0) {
-    return generateAllMoves(board, player, match).slice(0, 20);
-  }
-
+  // Bound attacking branches, while retaining all generated forcing rifts.
+  // Mandatory defensive replies above are complete and never use this cap.
   tactical.sort((a, b) => b.score - a.score);
-  return tactical.slice(0, 20);
+  let pairs = 0;
+  return tactical.filter(m => m.move.action === 'rift' || ++pairs <= 12);
 }
 
 /**

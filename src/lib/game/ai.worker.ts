@@ -198,18 +198,6 @@ interface BenchmarkNpsResult {
 const CENTER_RC = Math.floor(BOARD_SIZE / 2);
 const CENTER_INDEX = toIndex(CENTER_RC, CENTER_RC);
 
-function isMateCodedLossScore(score: number, depth: number, maxDepth: number): boolean {
-  if (!Number.isFinite(score)) return false;
-  if (score < CONFIG.LOSS_SCORE) return false;
-
-  const d = Number.isFinite(depth) && depth > 0 ? Math.floor(depth) : Math.max(1, Math.floor(maxDepth));
-  // Upper bound for the ply-offset used in mate-coded terminal scores:
-  // depth (main search) + quiescence + small margin for extensions / off-by-one.
-  const maxMatePlies = d + CONFIG.QUIESCENCE_DEPTH + 4;
-
-  return score <= CONFIG.LOSS_SCORE + maxMatePlies;
-}
-
 // ---- Ultra shared-TT backing (reuse to avoid repeated large SAB allocations) ----
 let ultraSharedTTBacking: SharedTranspositionTableBacking | null = null;
 
@@ -1487,19 +1475,8 @@ async function handleFindBestMove(request: FindMoveRequest): Promise<MoveResult>
       return { type: 'result', move: null };
     }
 
-    // Optional resignation: only when the existing search already returned a mate/terminal-coded loss.
-    // No additional searching is performed.
-    const reachedDepth = result.depth ?? 0;
-    if (scoreToWin !== 0 && isMateCodedLossScore(result.score, reachedDepth, maxDepth)) {
-      const winner = player === BLACK ? 'white' : 'black';
-      clearActiveDihedral();
-      resetPonderingState();
-      return {
-        type: 'result',
-        resign: { winner, score: result.score, depth: reachedDepth },
-        move: null,
-      };
-    }
+    // Selective search scores are not a complete proof of defeat. Keep playing
+    // a legal move; candidate limits and timeouts must never trigger resignation.
 
     // Guard: never emit an illegal move (can happen in rare TT/collision or edge states).
     let chosenMove: Move = baseMove;

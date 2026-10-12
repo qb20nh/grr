@@ -3,6 +3,7 @@
  */
 
 import { PatternType } from './types';
+import type { CellIndex } from './types';
 
 // Board dimensions
 export const BOARD_SIZE = 15;
@@ -40,7 +41,7 @@ export const CONFIG = {
   // Search parameters
   MAX_DEPTH: 20,              // Maximum search depth
   KILLER_SLOTS: 2,            // Killer moves per depth
-  QUIESCENCE_DEPTH: 4,        // Max quiescence plies
+  QUIESCENCE_DEPTH: 4,        // Max forcing continuations beyond the main search
 
   // Null-move pruning (NMP)
   // Conservative defaults; always disabled under tactical danger inside the search.
@@ -60,6 +61,8 @@ export const CONFIG = {
   INFINITY: 10000000,
   WIN_SCORE: 9000000,
   LOSS_SCORE: -9000000,
+  // Heuristics must never enter the terminal/mate-distance score range.
+  MAX_STATIC_SCORE: 8000000,
 
   // NNUE (optional) evaluation scaling
   // NNUE returns [-1, 1]; we map it into the engine score domain with this multiplier.
@@ -68,6 +71,22 @@ export const CONFIG = {
   // NNUE-assisted move ordering: rescore the top-K ordered moves (root only by default).
   NNUE_ORDER_RESCORE_TOP_K: 12,
 } as const;
+
+// Shared, immutable radius-two geometry for move and fork candidates. Keeping
+// both scanners on the same ordered lists also avoids repeated edge arithmetic.
+export const CANDIDATE_NEIGHBORS: readonly CellIndex[][] = (() => {
+  const neighbors: CellIndex[][] = Array.from({ length: BOARD_CELLS }, () => []);
+  const radius = CONFIG.CANDIDATE_RADIUS;
+  for (let pos = 0; pos < BOARD_CELLS; pos++) {
+    const row = Math.floor(pos / BOARD_SIZE), col = pos % BOARD_SIZE;
+    for (let dr = -radius; dr <= radius; dr++) for (let dc = -radius; dc <= radius; dc++) {
+      if (dr === 0 && dc === 0) continue;
+      const r = row + dr, c = col + dc;
+      if (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE) neighbors[pos].push(r * BOARD_SIZE + c);
+    }
+  }
+  return neighbors;
+})();
 
 // Pattern scores - self (positive when we have them)
 export const PATTERN_SCORES_SELF: Record<PatternType, number> = {
