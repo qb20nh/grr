@@ -3,7 +3,7 @@
  * Identifies urgent tactical situations
  */
 
-import { BOARD_SIZE, BOARD_CELLS, DIRECTIONS } from './constants';
+import { BOARD_SIZE, BOARD_CELLS, DIRECTIONS, CANDIDATE_NEIGHBORS } from './constants';
 import type { Board, CellIndex, Color, Fork, PatternCounts } from './types';
 import { ThreatLevel, EMPTY } from './types';
 import { getOpponent } from './utils';
@@ -61,19 +61,6 @@ export function getBlockingMask(board: Board, player: Color, ignoreKo: boolean =
   return { mask: BLOCK_MASK, stamp };
 }
 
-// Candidate generation for fork detection (radius-2 neighborhood around any stone).
-// Implemented locally to avoid cyclic deps with move generation.
-const FORK_OFFSETS: readonly [number, number][] = (() => {
-  const out: [number, number][] = [];
-  for (let dr = -2; dr <= 2; dr++) {
-    for (let dc = -2; dc <= 2; dc++) {
-      if (dr === 0 && dc === 0) continue;
-      out.push([dr, dc]);
-    }
-  }
-  return out;
-})();
-
 // Fork-candidate de-dup stamp (avoid per-call Uint8Array allocations).
 const FORK_SEEN = new Uint32Array(BOARD_CELLS);
 let forkStamp = 1;
@@ -92,14 +79,7 @@ function forkCandidates(board: Board): CellIndex[] {
 
   for (let pos = 0; pos < BOARD_CELLS; pos++) {
     if (board.cells[pos] === EMPTY) continue;
-    const row = Math.floor(pos / 15);
-    const col = pos % 15;
-
-    for (const [dr, dc] of FORK_OFFSETS) {
-      const r = row + dr;
-      const c = col + dc;
-      if (r < 0 || r >= 15 || c < 0 || c >= 15) continue;
-      const idx = r * 15 + c;
+    for (const idx of CANDIDATE_NEIGHBORS[pos]) {
       if (board.cells[idx] !== EMPTY) continue;
       if (board.koPosition === idx) continue;
       if (FORK_SEEN[idx] === stamp) continue;

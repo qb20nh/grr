@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { boardFrom2D, cloneBoard, makeMove, unmakeMove, applyScoringAndClear, validateReinforce, placeStone, checkWinAt } from '../src/lib/game/ai/board.ts';
-import { alphaBetaWindowed, iterativeDeepening, findBestMove } from '../src/lib/game/ai/search.ts';
+import { alphaBetaWindowed, iterativeDeepening, findBestMove, createSearchSession } from '../src/lib/game/ai/search.ts';
 import { TranspositionTable } from '../src/lib/game/ai/transposition.ts';
 import { NnueState } from '../src/lib/game/ai/nnue/evaluator.ts';
 import { featureIndex } from '../src/lib/game/ai/nnue/features.ts';
@@ -10,6 +10,7 @@ import { clearMoveOrdering } from '../src/lib/game/ai/moveOrder.ts';
 import { createReinforceScorer, evaluateReinforceMove } from '../src/lib/game/ai/synergy.ts';
 import { getBlockingMask, getSingleStoneWinningSquares } from '../src/lib/game/ai/threats.ts';
 import { evaluateSearch, evaluateHandcrafted } from '../src/lib/game/ai/evaluate.ts';
+import { generateAllMoves } from '../src/lib/game/ai/moveGen.ts';
 
 function board(stones) {
   const grid = Array.from({ length: 15 }, () => Array(15).fill(null));
@@ -67,6 +68,38 @@ test('large heuristic fork penalties cannot masquerade as a proven match loss', 
   assert.equal(evaluateSearch(b, 1, null), -CONFIG.MAX_STATIC_SCORE);
 });
 
+test('unsearched fallback scores cannot present ordering bonuses as a proven win', () => {
+  const b = board([[1,7,3],[1,7,4],[1,7,5],[1,7,6],[2,9,9]]);
+  const result = iterativeDeepening(b, 1, 100, 0, { scoreToWin: 3 });
+  assert.equal(result.depth, 0);
+  assert.ok(Math.abs(result.score) <= CONFIG.MAX_STATIC_SCORE);
+  const session = createSearchSession(b, 1, 3, new TranspositionTable(16), null, null, null, null,
+    { black: 0, white: 0 }, 3);
+  assert.equal(session.getBest().depth, 0);
+  assert.ok(Math.abs(session.getBest().score) <= CONFIG.MAX_STATIC_SCORE);
+});
+
+test('a defensive replacement discards the previous move\'s score and search depth', () => {
+  const b = board([[2,7,0],[2,7,1],[2,7,2],[2,7,3],[1,5,5],[1,9,9]]);
+  const before = cloneBoard(b);
+  const bad = { action: 'reinforce', pos1: 81, pos2: 128 };
+  assert.equal(validateReinforce(b, bad.pos1, bad.pos2, 1), true);
+  // Simulate a cached search whose selective line chose a losing move. The
+  // public findBestMove boundary must repair both move and its attached value.
+  class LosingLineTable extends TranspositionTable {
+    tryGetScore() { return [true, CONFIG.LOSS_SCORE + 3, bad]; }
+  }
+  const result = findBestMove(b, 1, 100, 3, null, null, null, null,
+    { black: 0, white: 2 }, 3, { tt: new LosingLineTable(16) });
+  assert.notDeepEqual(result.move, bad);
+  assert.equal(result.depth, 0);
+  assert.ok(Math.abs(result.score) <= CONFIG.MAX_STATIC_SCORE);
+  assert.deepEqual(b, before);
+  const undo = makeMove(b, result.move, 1);
+  assert.equal(getSingleStoneWinningSquares(b, 2).length, 0);
+  unmakeMove(b, undo, 1);
+});
+
 test('winning-square scanner agrees with exhaustive exact-five checks, including edges and ko', () => {
   let state = 57421;
   for (let sample = 0; sample < 100; sample++) {
@@ -119,6 +152,45 @@ test('root filters do not share cached scores or return another filter\'s move',
   const result = search(b, { filter: second, tt });
   assert.equal(result.completed, true);
   assert.equal(result.move.action, 'reinforce');
+});
+
+test('root alternatives are not pruned by comparing ordering bonuses to position values', () => {
+  const b = board([[1,7,7],[2,9,9]]);
+  const candidates = generateAllMoves(b, 1).filter(m => m.move.action === 'reinforce' && m.score < 100000).slice(0, 14);
+  assert.equal(candidates.length, 14);
+  const target = candidates[12].move;
+  const same = (a, c) => a.action === c.action && a.pos1 === c.pos1 && a.pos2 === c.pos2;
+  // Exact child values from a cache are deliberately on a different scale from
+  // ordering bonuses. The late candidate must still be probed and selected.
+  class ChildValuesTable extends TranspositionTable {
+    tryGetScore() {
+      const selected = b.cells[target.pos1] === 1 && b.cells[target.pos2] === 1;
+      return [true, selected ? -700000 : -200000, null];
+    }
+  }
+  const result = search(b, { depth: 2, tt: new ChildValuesTable(16),
+    filter: move => candidates.some(c => same(c.move, move)), target: 3 });
+  assert.equal(result.completed, true);
+  assert.ok(same(result.move, target), JSON.stringify(result));
+  assert.equal(result.score, 700000);
+});
+
+test('a loss among the first root candidates widens the search instead of giving up', () => {
+  const b = board([[1,7,7],[2,9,9]]);
+  const candidates = generateAllMoves(b, 1);
+  const target = candidates[30].move;
+  assert.equal(target.action, 'reinforce');
+  class DefensiveValuesTable extends TranspositionTable {
+    tryGetScore(hash, depth, alpha, beta, ply) {
+      if (ply === 0) return [false, 0, null];
+      const selected = b.cells[target.pos1] === 1 && b.cells[target.pos2] === 1;
+      return [true, selected ? 0 : CONFIG.WIN_SCORE - 3, null];
+    }
+  }
+  const result = iterativeDeepening(b, 1, 1000, 2, { tt: new DefensiveValuesTable(64), scoreToWin: 3 });
+  assert.equal(result.depth, 2);
+  assert.equal(Math.abs(result.score), 0);
+  assert.deepEqual(result.move, target);
 });
 
 test('quiescence cannot stand pat instead of answering an immediate scoring threat', () => {

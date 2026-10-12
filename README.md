@@ -48,6 +48,11 @@ This repo sets these headers automatically for `vite dev` and `vite preview` (se
 
 ## Training (self-play → NNUE → Elo-gated promotion)
 
+**Current application status:** browser workers use the handcrafted evaluator;
+NNUE is not active. Offline training and optional evaluator code exist, but no
+trained weights are connected to live play. The AI benchmarks below use this
+active, non-NNUE configuration.
+
 This repo includes an **offline self-improvement loop** that:
 
 - generates self-play data
@@ -77,7 +82,7 @@ python training/cycle.py --cycles 1 --games 50
 ### Where weights live
 
 - **Best (canonical)**: `training/best/weights.bin`
-- **App-consumed (bundled when present)**: `static/nnue/weights.bin`
+- **Optional export location (not activated in the app)**: `static/nnue/weights.bin`
   - The optional loader resolves `(<base>/nnue/weights.bin)`. Current browser workers explicitly use handcrafted evaluation; the search/training API can accept NNUE weights. The loader returns null for missing/corrupt weights.
     - Dev: `/nnue/weights.bin`
     - Prod (this repo’s static base path): `/grr/nnue/weights.bin`
@@ -113,19 +118,27 @@ pnpm check
 pnpm build
 ```
 
-`test:ai` covers exact-five/overline detection, ko, legal pair-scoring equivalence,
-bounded tactical search, PVS bounds, opening-filter cache isolation, NNUE scoring
-and undo, and concurrent shared-TT writers, followed by the tactical puzzles.
-The benchmark warms up JavaScript and resets TT/history between measured searches.
+`test:ai` covers exact-five/overline and one-gap pattern detection, ko, legal
+pair-scoring equivalence, bounded tactical search, PVS bounds, opening-filter
+cache isolation, root pruning and fallback values, Ultra result selection,
+concurrent shared-TT writers, and the optional NNUE accumulator, followed by the
+tactical puzzles. The application worker protocol is also exercised under Node.
+`bench:ai` bundles the engine first, warms up JavaScript, and resets TT/history
+between measured searches. This measures bundled Node execution, not browser UI
+latency. Do not compare its numbers directly with unbundled `tsx` timings.
 
 To compare an older checkout with the current engine:
 
 ```sh
-node --import tsx scripts/compare_ai.mjs --reference ../grr-baseline --games 16 --time 100
+node scripts/bench_ai.mjs --root ../grr-baseline --benchIters 5 --benchTimeMs 400
+node scripts/bench_ai.mjs --benchIters 5 --benchTimeMs 400
+node --import tsx scripts/compare_ai.mjs --reference ../grr-baseline --bundle --games 16 --time 500 --opening quiet
 ```
 
 This prints JSON lines for equal-work move-generation timings and color-swapped
-matches from paired openings. Matches use a one-point target, an 80-ply cap and
+matches from paired openings. Use `--require-identical` to assert unchanged move
+generation during a pure speed experiment. Defaults use a one-point target
+(`--target 3` tests score clearing), an 80-ply cap and
 threefold-repetition adjudication. Illegal scoring singles are reported as
 forfeits; this harness does not model the UI's fallback for rejected moves.
 These small, time-limited matches are a regression check, not an Elo estimate.

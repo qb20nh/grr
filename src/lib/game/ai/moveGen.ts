@@ -3,10 +3,10 @@
  * Generates and filters candidate moves with colinearity constraints
  */
 
-import { BOARD_SIZE, BOARD_CELLS, CONFIG } from './constants';
+import { BOARD_SIZE, BOARD_CELLS, CONFIG, CANDIDATE_NEIGHBORS } from './constants';
 import type { Board, CellIndex, Color, Move, ScoredMove, ReinforceMove, RiftMove } from './types';
 import { EMPTY, BLACK, WHITE } from './types';
-import { getOpponent, createReinforceMove, createSingleWinMove, createRiftMove, isSingleWinMove, toIndex, inBounds } from './utils';
+import { getOpponent, createReinforceMove, createSingleWinMove, createRiftMove, isSingleWinMove, toIndex } from './utils';
 import { isValidPlacement, checkColinearityConstraint, validateReinforce } from './board';
 import { evaluateSinglePosition, evaluateReinforceMove, createReinforceScorer } from './synergy';
 import { evaluateRiftTarget, findWinningPositions, findWinningPositionsAssumingKoClears, getBlockingMask, riftBreaksThreat } from './threats';
@@ -17,29 +17,6 @@ export interface MatchContext {
   /** 0 means “unlimited” (play until exhaustion). */
   scoreToWin: number;
 }
-
-// Precomputed neighbor lists (radius = CONFIG.CANDIDATE_RADIUS) for fast candidate generation.
-const NEIGHBORS: readonly CellIndex[][] = (() => {
-  const radius = CONFIG.CANDIDATE_RADIUS;
-  const neighbors: CellIndex[][] = Array.from({ length: BOARD_CELLS }, () => []);
-
-  for (let idx = 0; idx < BOARD_CELLS; idx++) {
-    const row = Math.floor(idx / BOARD_SIZE);
-    const col = idx % BOARD_SIZE;
-
-    for (let dr = -radius; dr <= radius; dr++) {
-      for (let dc = -radius; dc <= radius; dc++) {
-        if (dr === 0 && dc === 0) continue;
-        const nr = row + dr;
-        const nc = col + dc;
-        if (!inBounds(nr, nc)) continue;
-        neighbors[idx].push(toIndex(nr, nc));
-      }
-    }
-  }
-
-  return neighbors;
-})();
 
 // ---- Scratch masks (avoid Set allocations in hot paths) ----
 const CANDIDATE_SEEN = new Uint32Array(BOARD_CELLS);
@@ -104,7 +81,7 @@ export function getCandidatePositions(board: Board): CellIndex[] {
   for (let i = 0; i < BOARD_CELLS; i++) {
     if (board.cells[i] === EMPTY) continue;
 
-    for (const idx of NEIGHBORS[i]) {
+    for (const idx of CANDIDATE_NEIGHBORS[i]) {
       // Fast placement check (idx already in-bounds).
       if (board.cells[idx] !== EMPTY) continue;
       if (board.koPosition === idx) continue;
@@ -170,6 +147,12 @@ export function generateReinforceMoves(
   const playerOnMatchPoint = scoreToWin !== 0 && playerScore + 1 >= scoreToWin;
   const opponentOnMatchPoint = scoreToWin !== 0 && opponentScore + 1 >= scoreToWin;
 
+  // A match-ending single needs no candidate scoring or pair enumeration.
+  const scoringPositions = findWinningPositions(board, player);
+  if (playerOnMatchPoint && scoringPositions.length > 0) {
+    return [{ move: createSingleWinMove(scoringPositions[0]), score: CONFIG.INFINITY, orderScore: CONFIG.INFINITY }];
+  }
+
   const blocking = getBlockingMask(board, player, false);
 
   // Materialize blocking positions once (used for must-block and bonuses).
@@ -188,21 +171,8 @@ export function generateReinforceMoves(
   
   const moves: ScoredMove[] = [];
   
-  // Single-stone scoring moves (legal only when they score).
-  const scoringPositions = findWinningPositions(board, player);
+  // Nonterminal scoring singles remain candidates in multi-point matches.
   if (scoringPositions.length > 0) {
-    // If scoring ends the match, we can treat it as an immediate win (root will terminate).
-    if (playerOnMatchPoint) {
-      const winPos = scoringPositions[0];
-      return [
-        {
-          move: createSingleWinMove(winPos),
-          score: CONFIG.INFINITY,
-          orderScore: CONFIG.INFINITY,
-        },
-      ];
-    }
-
     // Otherwise, include a few scoring singles as high-value candidates (ordering only).
     // Keep this conservative: search should decide whether “taking a point” is worth it.
     const SCORE_BONUS = 120000;

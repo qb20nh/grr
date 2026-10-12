@@ -29,6 +29,10 @@ let searchAborted = false;
 interface SearchContext {
   board: Board;
   nnue: NnueState | null;
+  // Only canonical search positions enter this cache, never hypothetical helper mutations.
+  evalCache: Map<bigint, number>;
+  /** Expand the generated root set after a selective search reports a loss. */
+  rootFullWidth: boolean;
   /**
    * Match score state (points). Mutated by `applyMove`/`revertMove`.
    */
@@ -123,7 +127,21 @@ function pointValue(scoreToWin: number): number {
 }
 
 function evaluateWithMatch(ctx: SearchContext, player: Color): number {
-  const base = evaluateSearch(ctx.board, player, ctx.nnue);
+  let base: number;
+  if (ctx.nnue) {
+    base = evaluateSearch(ctx.board, player, ctx.nnue);
+  } else {
+    // Search-local: board + ko + perspective determine the handcrafted value.
+    // Match points are added below, so scoring transpositions remain distinct.
+    const key = withTurn(ctx.board.hash, player);
+    const cached = ctx.evalCache.get(key);
+    if (cached !== undefined) base = cached;
+    else {
+      base = evaluateSearch(ctx.board, player, null);
+      if (ctx.evalCache.size >= 16384) ctx.evalCache.clear();
+      ctx.evalCache.set(key, base);
+    }
+  }
   if (ctx.scoreToWin === 0) return base;
   const pv = pointValue(ctx.scoreToWin);
   if (pv === 0) return base;
@@ -514,7 +532,7 @@ function alphaBeta(
   }
 
   // Progressive widening at root: start with a smaller set of top moves and expand with depth.
-  if (ply === 0) {
+  if (ply === 0 && !ctx.rootFullWidth) {
     const base = underCriticalThreat ? 24 : 12;
     const perDepth = underCriticalThreat ? 6 : 4;
     const limit = Math.min(moves.length, base + perDepth * Math.max(0, depth - 1));
@@ -559,6 +577,15 @@ function alphaBeta(
       }
     }
 
+    // Futility compares a position value with alpha, never a move-ordering
+    // bonus. Apply it only to quiet non-PV nodes, while the parent board is
+    // still intact; root alternatives always receive a real search.
+    if (ply > 0 && depth <= 2 && searchedMoves >= 8 && beta - alpha <= 1 &&
+        lmpNodeQuiet && move.action !== 'rift' && !isInterestingMove(ctx.board, move, player, moveScore) &&
+        evaluateWithMatch(ctx, player) + getFutilityMargin(depth) <= alpha) {
+      continue;
+    }
+
     const undoInfo = applyMove(ctx, move, player);
     
     let score: number;
@@ -576,18 +603,6 @@ function alphaBeta(
       // Extending every frontier threat keeps depth at 1 indefinitely in rift cycles.
       const fullChildDepth = depth - 1;
 
-      // Futility pruning (very conservative):
-      // Skip late, non-tactical moves at shallow depth when even the optimistic moveScore
-      // cannot raise alpha by the margin.
-      if (!underCriticalThreat && depth <= 2 && searchedMoves >= 8 && !isCapture && !givesCheck) {
-        const margin = getFutilityMargin(depth);
-        if (pruningSafe && moveScore + margin <= alpha) {
-          revertMove(ctx, undoInfo, player);
-          searchedMoves++;
-          continue;
-        }
-      }
-    
       // Principal Variation Search
       if (searchedMoves === 0) {
         // Full window search for first move (expected best move)
@@ -707,6 +722,8 @@ export function alphaBetaWindowed(
   const ctx: SearchContext = {
     board,
     nnue,
+    evalCache: new Map(),
+    rootFullWidth: false,
     scoreBlack: scores.black,
     scoreWhite: scores.white,
     scoreToWin,
@@ -818,6 +835,8 @@ export function iterativeDeepening(
   const ctx: SearchContext = {
     board,
     nnue,
+    evalCache: new Map(),
+    rootFullWidth: false,
     scoreBlack: options?.scores?.black ?? 0,
     scoreWhite: options?.scores?.white ?? 0,
     scoreToWin: options?.scoreToWin ?? 1,
@@ -834,7 +853,8 @@ export function iterativeDeepening(
     scoreToWin: ctx.scoreToWin,
   });
   let bestMoveSoFar: Move | null = allMoves.length > 0 ? allMoves[0].move : null;
-  let bestScoreSoFar = allMoves.length > 0 ? allMoves[0].score : 0;
+  // Move-ordering bonuses can exceed mate scores and are not position values.
+  let bestScoreSoFar = evaluateWithMatch(ctx, player);
   let bestDepthSoFar = 0;
 
   // If we have a root ordering hint (e.g. a known-good defensive refutation),
@@ -844,7 +864,6 @@ export function iterativeDeepening(
     const match = allMoves.find(m => movesEqual(m.move, hinted));
     if (match) {
       bestMoveSoFar = match.move;
-      bestScoreSoFar = match.score;
     }
   }
   
@@ -918,9 +937,10 @@ export function iterativeDeepening(
         break;
       }
       
-      // Early termination if found forced loss (no point searching deeper)
+      // A loss in a selectively widened tree is not a proof that every root
+      // alternative loses. Expand candidates and keep looking within the budget.
       if (result.score <= CONFIG.LOSS_SCORE + 100) {
-        break;
+        ctx.rootFullWidth = true;
       }
     }
     
@@ -972,6 +992,8 @@ class SearchSessionImpl implements SearchSession {
   private pvTable: PVTable;
   private nnueWeights: NnueWeights | null;
   private nnue: NnueState | null = null;
+  private evalCache = new Map<bigint, number>();
+  private rootFullWidth = false;
   private scoreBlack: number;
   private scoreWhite: number;
   private scoreToWin: number;
@@ -1016,6 +1038,8 @@ class SearchSessionImpl implements SearchSession {
     // Age the TT once per new position so entries from old positions become replaceable.
     this.tt.newSearch();
     this.pvTable.clear();
+    this.evalCache.clear();
+    this.rootFullWidth = false;
 
     this.nnue = this.nnueWeights ? NnueState.fromBoard(this.board, this.nnueWeights) : null;
 
@@ -1025,7 +1049,9 @@ class SearchSessionImpl implements SearchSession {
       scoreToWin: this.scoreToWin,
     });
     this.bestMove = moves.length > 0 ? moves[0].move : null;
-    this.bestScore = moves.length > 0 ? moves[0].score : 0;
+    this.bestScore = evaluateSearch(this.board, this.player, this.nnue);
+    this.bestScore = clampStaticScore(this.bestScore +
+      (this.player === BLACK ? this.scoreBlack - this.scoreWhite : this.scoreWhite - this.scoreBlack) * pointValue(this.scoreToWin));
     this.bestDepth = 0;
     this.lastScore = this.bestScore;
     this.nextDepth = 1;
@@ -1092,6 +1118,8 @@ class SearchSessionImpl implements SearchSession {
     const ctx: SearchContext = {
       board: this.board,
       nnue: this.nnue,
+      evalCache: this.evalCache,
+      rootFullWidth: this.rootFullWidth,
       scoreBlack: this.scoreBlack,
       scoreWhite: this.scoreWhite,
       scoreToWin: this.scoreToWin,
@@ -1149,7 +1177,10 @@ class SearchSessionImpl implements SearchSession {
         this.nextDepth = depth + 1;
 
         if (result.score >= CONFIG.WIN_SCORE - 100) break;
-        if (result.score <= CONFIG.LOSS_SCORE + 100) break;
+        if (result.score <= CONFIG.LOSS_SCORE + 100) {
+          ctx.rootFullWidth = true;
+          this.rootFullWidth = true;
+        }
       }
 
       if (timeState && shouldStopSearch(timeState, this.lastScore)) {
@@ -1237,6 +1268,8 @@ export function findBestMove(
   const quickCtx: SearchContext = {
     board,
     nnue: null, // NNUE disabled (handcrafted eval only)
+    evalCache: new Map(),
+    rootFullWidth: false,
     scoreBlack: scores.black,
     scoreWhite: scores.white,
     scoreToWin,
@@ -1290,11 +1323,20 @@ export function findBestMove(
   // even under very small time budgets where deep search may not complete.
   function sanitizeRootMove(result: SearchResult): SearchResult {
     if (!result.move) return result;
+    const replacement = (move: Move | null): SearchResult => {
+      if (!move) return { ...result, move, score: 0, depth: 0 };
+      const undo = applyMove(quickCtx, move, player);
+      const winner = getMatchWinner(quickCtx);
+      const score = winner !== null ? scoreForMatchWinner(winner, player, 1) : -evaluateWithMatch(quickCtx, opponent);
+      revertMove(quickCtx, undo, player);
+      // The previous PV's score/depth does not describe this replacement move.
+      return { ...result, move, score, depth: winner === null ? 0 : 1 };
+    };
     // If an external source (e.g. TSS) produced a move outside the root filter, do NOT return it.
     // This can happen under small budgets where we might otherwise return immediately.
     if (rootMoveFilter && !rootMoveFilter(result.move)) {
       const fallback = moves[0]?.move ?? null;
-      return { ...result, move: fallback };
+      return replacement(fallback);
     }
 
     const allowsImmediateLoss = (mv: Move): boolean => {
@@ -1323,7 +1365,7 @@ export function findBestMove(
     for (const { move } of moves) {
       if (!move) continue;
       if (!allowsImmediateLoss(move)) {
-        return { ...result, move };
+        return replacement(move);
       }
     }
 

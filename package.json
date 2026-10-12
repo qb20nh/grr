@@ -13,7 +13,7 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"test:ai": "node --import tsx --test scripts/*.test.mjs && tsx scripts/run_puzzles.ts",
-		"bench:ai": "tsx scripts/run_puzzles.ts --benchmark --benchClean",
+		"bench:ai": "node scripts/bench_ai.mjs",
 		"tauri": "tauri",
 		"tauri:dev": "tauri dev",
 		"tauri:build": "tauri build",
