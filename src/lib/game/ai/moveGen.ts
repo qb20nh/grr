@@ -7,9 +7,9 @@ import { BOARD_SIZE, BOARD_CELLS, CONFIG, CANDIDATE_NEIGHBORS } from './constant
 import type { Board, CellIndex, Color, Move, ScoredMove, ReinforceMove, RiftMove } from './types';
 import { EMPTY, BLACK, WHITE } from './types';
 import { getOpponent, createReinforceMove, createSingleWinMove, createRiftMove, isSingleWinMove, toIndex } from './utils';
-import { isValidPlacement, checkColinearityConstraint, validateReinforce, makeMove, unmakeMove, getWinnerAfterMove } from './board';
+import { isValidPlacement, checkColinearityConstraint, validateReinforce, makeMove, unmakeMove, getWinnerAfterMove, cloneBoard, applyScoringAndClear } from './board';
 import { evaluateSinglePosition, evaluateReinforceMove, createReinforceScorer } from './synergy';
-import { evaluateRiftTarget, findWinningPositions, findWinningPositionsAssumingKoClears, getBlockingMask } from './threats';
+import { evaluateRiftTarget, findWinningPositions, findWinningPositionsAssumingKoClears, getBlockingMask, hasImmediateThreatAfterMove, getImmediateMatchWinningMove } from './threats';
 import type { BlockingMask } from './threats';
 
 export interface MatchContext {
@@ -26,6 +26,7 @@ export interface MatchContext {
 export function generateImmediateResponses(board: Board, player: Color, match?: MatchContext): ScoredMove[] | null {
   const target = match?.scoreToWin ?? 1;
   if (target === 0) return null;
+  if (target > 1) return generateMultiPointResponses(board, player, match!);
   const ownScore = player === BLACK ? match?.scores.black ?? 0 : match?.scores.white ?? 0;
   const opponent = getOpponent(player);
   const opponentScore = opponent === BLACK ? match?.scores.black ?? 0 : match?.scores.white ?? 0;
@@ -69,6 +70,53 @@ export function generateImmediateResponses(board: Board, player: Color, match?: 
     responses.push({ move, score, orderScore: score });
   }
   responses.sort((a, b) => b.score - a.score);
+  return responses;
+}
+
+function generateMultiPointResponses(board: Board, player: Color, match: MatchContext): ScoredMove[] | null {
+  const ownScore = player === BLACK ? match.scores.black : match.scores.white;
+  const opponent = getOpponent(player);
+  const opponentScore = opponent === BLACK ? match.scores.black : match.scores.white;
+  const win = getImmediateMatchWinningMove(board, player, match.scoreToWin - ownScore);
+  if (win) return [{move:win, score:CONFIG.INFINITY, orderScore:CONFIG.INFINITY}];
+  // Taking nonterminal points clears friendly shields and can change pair legality.
+  // Keep the ordinary match search when such counter-scoring moves are possible.
+  if (findWinningPositions(board, player).length > 0) return null;
+  const threat = getImmediateMatchWinningMove(board, opponent, match.scoreToWin - opponentScore, 'ignoreKo');
+  if (!threat) return null;
+
+  const responses: ScoredMove[] = [];
+  const scorer = createReinforceScorer(board, player, getBlockingMask(board, player));
+  const seen = new Set<number>();
+  // A non-scoring placement must occupy at least one square of this winning
+  // move. Enumerate every legal filler, then check all remaining winning moves.
+  for (const a of threat.pos2 === null ? [threat.pos1] : [threat.pos1, threat.pos2]) {
+    for (let b = 0; b < BOARD_CELLS; b++) {
+      if (!validateReinforce(board, a, b, player)) continue;
+      const key = pairKey(a, b);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const move = createReinforceMove(a, b);
+      const undo = makeMove(board, move, player);
+      const safe = getImmediateMatchWinningMove(board, opponent, match.scoreToWin - opponentScore) === null;
+      unmakeMove(board, undo, player);
+      if (!safe) continue;
+      const score = scorer.pair(a, b);
+      responses.push({move, score, orderScore:score});
+    }
+  }
+  for (let pos = 0; pos < BOARD_CELLS; pos++) {
+    if (board.cells[pos] !== opponent) continue;
+    const move = createRiftMove(pos);
+    const after = cloneBoard(board);
+    makeMove(after, move, player);
+    const scoring = applyScoringAndClear(after, move, player);
+    const remaining = match.scoreToWin - opponentScore - scoring.points;
+    if (remaining <= 0 || getImmediateMatchWinningMove(after, opponent, remaining)) continue;
+    const score = evaluateRiftTarget(board, pos, player);
+    responses.push({move, score, orderScore:score});
+  }
+  responses.sort((a,b) => b.score - a.score);
   return responses;
 }
 
@@ -456,13 +504,14 @@ export function generateTacticalMoves(
   if (responses !== null) return responses;
   const opponent = getOpponent(player);
   const defending = findWinningPositionsAssumingKoClears(board, opponent).length > 0;
+  const previousWins = findWinningPositionsAssumingKoClears(board, player);
   const candidates = [...generateReinforceMoves(board, player, match), ...generateRiftMoves(board, player, match)];
   const tactical: ScoredMove[] = [];
   for (const candidate of candidates) {
     const undo = makeMove(board, candidate.move, player);
     const winner = getWinnerAfterMove(board, candidate.move, player);
     const forcing = winner === player || (winner === null &&
-      (findWinningPositionsAssumingKoClears(board, player).length > 0 ||
+      (hasImmediateThreatAfterMove(board, player, candidate.move, previousWins) ||
         (defending && findWinningPositions(board, opponent).length === 0)));
     unmakeMove(board, undo, player);
     if (forcing) tactical.push(candidate);

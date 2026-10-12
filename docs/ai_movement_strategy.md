@@ -286,6 +286,8 @@ This section lists the main performance-oriented techniques that are implemented
   - `createReinforceScorer` evaluates each candidate placement once per generation call. Legal pairs cannot alter each other's line patterns: they are non-collinear or separated by an opponent stone. Pair scoring reuses those independent results, including attack and fork information.
   - Opening-filter fallback enumeration reuses the same cached placement scorer when searching beyond the local candidate set, including Black's restricted second move in Long Pro.
   - Single-stone scoring squares come from exact contiguous-run counts, including stones across a gap. A pattern label is insufficient: filling `XXXX_X` produces an overline, not a score.
+  - Winning-square queries share precomputed line geometry. Candidate attack checks scan runs through newly placed stones and recheck previous winning squares; a rift can create a new attacking winning square only at the removed cell. This avoids a full-board scan for every candidate.
+  - Fork detection first checks whether at least two directions have a friendly stone within two steps, a necessary condition for the supported one-gap patterns. Detailed pattern scoring is unchanged.
 
 - **Branching-factor control by construction**
   - Candidate/move list sizes are capped (`CONFIG.MAX_CANDIDATES`, `CONFIG.MAX_PAIRS`, `CONFIG.MAX_RIFTS`), and root search additionally uses progressive widening: `src/lib/game/ai/constants.ts`, `src/lib/game/ai/moveGen.ts`, `src/lib/game/ai/search.ts`.
@@ -294,6 +296,8 @@ This section lists the main performance-oriented techniques that are implemented
 
 - **Search efficiency (ordering + pruning + stable time control)**
   - Alpha-beta uses PVS, aspiration windows, and quiescence with forcing attacks and immediate defenses (`generateTacticalMoves`). Attack pairs are capped after checking that they create a real scoring threat; generated forcing rifts and mandatory defenses survive the cap. Ordering bonuses are not used as delta-pruning bounds.
+  - Forced-defense quiescence nodes skip the unused stand-pat evaluation; horizon values and nonterminal scoring fallbacks still evaluate normally.
+  - Multi-point wins count all exact-five lines, including intersecting lines and compatible scoring pairs. Immediate multi-point defenses inspect actual remaining points and scoring clears rather than assuming every move gains exactly one point.
   - Pruning/reduction suite includes (with conservative guardrails): razoring, null-move pruning (disabled under tactical danger), late-move pruning, late-move reductions, futility pruning: `src/lib/game/ai/search.ts`.
   - Ordering combines TT best-move, killer moves, history, countermove, and continuation history; all backed by typed arrays to avoid per-node allocations: `src/lib/game/ai/moveOrder.ts`.
   - `ScoredMove.orderScore` is stored on the move objects to avoid allocating parallel “order score” arrays per node: `src/lib/game/ai/types.ts`, `src/lib/game/ai/moveOrder.ts`.
@@ -303,10 +307,12 @@ This section lists the main performance-oriented techniques that are implemented
   - PVS keeps the established best move on equal returned scores, since a null-window fail-low bound does not establish a genuine tie. Quiescence cannot stand pat against an immediate scoring threat. It checks legal match-winning singles even at its depth boundary and examines forcing attacks before declaring a position quiet.
   - Futility pruning compares the parent position evaluation with alpha and is limited to quiet non-PV nodes. Ordering bonuses cannot prune root alternatives. A selective loss no longer stops iterative deepening early.
   - Unsearched fallbacks use bounded position values. If root safety replaces a move, its score and depth are recalculated instead of retaining the discarded principal variation's metadata.
+  - Before the first iteration completes, a timeout preserves the best fully searched root child. The aborted child is excluded and completed depth remains zero. Completed iterations remain authoritative; repeated slices do not discard a stronger previously searched child from the same position.
 
 - **Evaluation hot-path micro-optimizations**
   - Pattern scoring avoids `Object.entries` and similar allocation-heavy constructs in the evaluation hot path: `src/lib/game/ai/evaluate.ts`.
   - Nonterminal heuristic scores, including match-point adjustments, are bounded below the mate-score range. Large fork penalties cannot be mistaken for a proven loss or trigger a false resignation.
+  - Hypothetical fork placements are alternative plans. Their bonus uses at most two compatible fork-producing squares instead of summing every alternative; existing board patterns are scored separately.
   - Line scanning uses precomputed board geometry and scans each contiguous run once when counting patterns. A gap variant joins exactly two adjacent runs; it cannot combine two separate gaps into a phantom threat.
   - A search-local cache holds up to 16,384 handcrafted values keyed by board, ko and player. Match points are applied separately. Helper functions that temporarily mutate cells never access this cache. Ponder sessions retain it only for their current position.
   - Move generation and fork detection share precomputed candidate neighborhoods. Match-ending single-stone moves bypass pair scoring.

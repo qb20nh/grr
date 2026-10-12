@@ -11,7 +11,7 @@ import type { Board, CellIndex, Color, Move } from './types';
 import { createReinforceMove, createRiftMove, createSingleWinMove, getOpponent } from './utils';
 import { makeMove, unmakeMove, validateReinforce } from './board';
 import { scanLine, classifyLine } from './patterns';
-import { getSingleStoneWinningSquares } from './threats';
+import { getSingleStoneWinningSquares, hasImmediateThreatAfterMove } from './threats';
 import { withTurn } from './zobrist';
 import { getCandidatePositions, scoreCandidates, generateAllMoves } from './moveGen';
 import { decodeMove, encodeMove, MOVE_CODE_NONE } from './moveCodec';
@@ -145,12 +145,13 @@ function riftCreatesWinForRemovedColor(board: Board, riftPos: CellIndex, removed
 
 function generateForcingAttackerMoves(board: Board, attacker: Color, limit: number): Move[] {
   const forcing: Move[] = [];
+  const previousWins = getImmediateWinSquares(board, attacker, 'ignoreKo');
   for (const { move } of generateAllMoves(board, attacker)) {
     const undo = makeMove(board, move, attacker);
     const safe = move.action !== 'rift' || !riftCreatesWinForRemovedColor(board, move.pos, getOpponent(attacker));
-    const threats = safe ? getImmediateWinSquares(board, attacker, 'ignoreKo') : [];
+    const forces = safe && hasImmediateThreatAfterMove(board, attacker, move, previousWins);
     unmakeMove(board, undo, attacker);
-    if (threats.length > 0) forcing.push(move);
+    if (forces) forcing.push(move);
   }
   // Apply the effort limit only after checking whether a move actually forces
   // a reply. Otherwise nonforcing pairs can consume the entire attacker quota.

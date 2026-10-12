@@ -30,9 +30,9 @@ const NO_POS: CellIndex = -1;
 
 // Board geometry is immutable; avoid row/column division, bounds checks, and
 // two temporary scan objects on every pattern lookup.
-const FORWARD_STEPS = new Uint8Array(BOARD_CELLS * 4);
-const BACKWARD_STEPS = new Uint8Array(BOARD_CELLS * 4);
-const LINE_OFFSETS = DIRECTIONS.map(([dr, dc]) => dr * BOARD_SIZE + dc);
+export const FORWARD_STEPS = new Uint8Array(BOARD_CELLS * 4);
+export const BACKWARD_STEPS = new Uint8Array(BOARD_CELLS * 4);
+export const LINE_OFFSETS = DIRECTIONS.map(([dr, dc]) => dr * BOARD_SIZE + dc);
 for (let pos = 0; pos < BOARD_CELLS; pos++) {
   const row = Math.floor(pos / BOARD_SIZE), col = pos % BOARD_SIZE;
   for (let dir = 0; dir < 4; dir++) {

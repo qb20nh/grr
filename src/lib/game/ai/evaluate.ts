@@ -8,6 +8,7 @@ import type { Board, Color, PatternCounts, CellIndex } from './types';
 import { ThreatLevel } from './types';
 import { getOpponent } from './utils';
 import { countPatterns } from './patterns';
+import { checkColinearityConstraint } from './board';
 import { getSingleStoneWinningSquares, getThreatLevel, detectForks } from './threats';
 import type { NnueState } from './nnue/evaluator';
 
@@ -34,7 +35,7 @@ function patternScore(patterns: PatternCounts, scores: typeof PATTERN_SCORES_SEL
  */
 function calculateForkBonus(board: Board, player: Color): number {
   const forks = detectForks(board, player);
-  let bonus = 0;
+  const values: number[] = [];
   
   for (const fork of forks) {
     // Classify fork type (allocation-free; avoid .filter()/.some() arrays)
@@ -46,17 +47,27 @@ function calculateForkBonus(board: Board, player: Color): number {
     }
     
     if (fourCount >= 2) {
-      bonus += FORK_BONUS.DOUBLE_FOUR;
+      values.push(FORK_BONUS.DOUBLE_FOUR);
     } else if (fourCount >= 1 && threeCount >= 1) {
-      bonus += FORK_BONUS.FOUR_THREE;
+      values.push(FORK_BONUS.FOUR_THREE);
     } else if (threeCount >= 3) {
-      bonus += FORK_BONUS.TRIPLE_THREE;
+      values.push(FORK_BONUS.TRIPLE_THREE);
     } else if (threeCount >= 2) {
-      bonus += FORK_BONUS.DOUBLE_THREE;
-    }
+      values.push(FORK_BONUS.DOUBLE_THREE);
+    } else values.push(0);
   }
   
-  return bonus;
+  // These are alternative future placements, not existing simultaneous forks.
+  // Score up to two compatible fork-producing squares instead of their sum.
+  let best = 0;
+  for (let i = 0; i < forks.length; i++) {
+    best = Math.max(best, values[i]);
+    for (let j = i + 1; j < forks.length; j++) {
+      const sum = values[i] + values[j];
+      if (sum > best && checkColinearityConstraint(board, forks[i].position, forks[j].position, player)) best = sum;
+    }
+  }
+  return best;
 }
 
 /**

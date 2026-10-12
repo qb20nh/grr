@@ -12,7 +12,7 @@ import { evaluateSearch, isQuietPosition, clampStaticScore } from './evaluate';
 import { generateAllMoves, generateTacticalMoves } from './moveGen';
 import { orderMoves, updateKillerMoves, updateHistory, updateCounterMove, updateContinuationHistory, clearMoveOrdering, PVTable, isInterestingMove, getLMRReduction, getFutilityMargin } from './moveOrder';
 import { getTranspositionTable, TranspositionTable } from './transposition';
-import { hasCriticalThreat, getSingleStoneWinningSquares, getBlockingMask } from './threats';
+import { hasCriticalThreat, getSingleStoneWinningSquares, getBlockingMask, getImmediateMatchWinningMove } from './threats';
 import { createTimeState, shouldStopSearch } from './timeManager';
 import { withTurn } from './zobrist';
 import { threatSpaceSearch } from './tss';
@@ -310,22 +310,23 @@ function quiescence(
     return scoreForMatchWinner(winnerNow, player, ply);
   }
 
-  // A legal scoring move on match point is exact even at the quiescence horizon.
+  // Count every scored line: one stone or a legal pair may win several points.
   const ownScore = player === BLACK ? ctx.scoreBlack : ctx.scoreWhite;
-  if (ctx.scoreToWin > 0 && ownScore + 1 >= ctx.scoreToWin &&
-      getSingleStoneWinningSquares(ctx.board, player).length > 0) {
+  if (ctx.scoreToWin > 0 && (ownScore + 1 >= ctx.scoreToWin
+      ? getSingleStoneWinningSquares(ctx.board, player).length > 0
+      : getImmediateMatchWinningMove(ctx.board, player, ctx.scoreToWin - ownScore) !== null)) {
     return scoreForMatchWinner(player, player, ply + 1);
   }
   
-  // Stand-pat evaluation
-  const standPat = evaluateWithMatch(ctx, player);
-  
   if (depth <= 0) {
-    return standPat;
+    return evaluateWithMatch(ctx, player);
   }
   
   // Passing is not a legal defense against an immediate scoring threat.
   const mustDefend = getSingleStoneWinningSquares(ctx.board, getOpponent(player), 'ignoreKo').length > 0;
+  // A forced reply cannot use stand pat; avoid expensive fork evaluation that
+  // would be discarded at these nodes.
+  const standPat = mustDefend ? -CONFIG.INFINITY : evaluateWithMatch(ctx, player);
   if (!mustDefend && standPat >= beta) {
     return beta;
   }
@@ -342,8 +343,10 @@ function quiescence(
   });
   const opponentScore = player === BLACK ? ctx.scoreWhite : ctx.scoreBlack;
   if (tacticalMoves.length === 0) {
-    return mustDefend && ctx.scoreToWin > 0 && opponentScore + 1 >= ctx.scoreToWin
-      ? scoreForMatchWinner(getOpponent(player), player, ply + 2) : standPat;
+    return mustDefend && ctx.scoreToWin > 0 && (opponentScore + 1 >= ctx.scoreToWin ||
+      getImmediateMatchWinningMove(ctx.board, getOpponent(player), ctx.scoreToWin - opponentScore, 'ignoreKo') !== null)
+      ? scoreForMatchWinner(getOpponent(player), player, ply + 2)
+      : mustDefend ? evaluateWithMatch(ctx, player) : standPat;
   }
   
   for (const { move } of tacticalMoves) {
@@ -653,7 +656,10 @@ function alphaBeta(
     }
     
     if (searchAborted) {
-      return { completed: false, score: 0, move: null };
+      // Only fully searched siblings have reached bestMove. Preserve their
+      // root choice for an interrupted first iteration, never the aborted child.
+      return { completed: false, score: bestMove ? bestScore : 0,
+        move: ply === 0 ? bestMove : null };
     }
     
     // Update best score
@@ -925,7 +931,12 @@ export function iterativeDeepening(
     }
     
     if (searchAborted) {
-      // Use best move from previous completed iteration
+      // A completed iteration remains authoritative. Before the first one
+      // finishes, prefer a searched root child over the heuristic-only fallback.
+      if (bestDepthSoFar === 0 && result.move !== null) {
+        bestMoveSoFar = result.move;
+        bestScoreSoFar = result.score;
+      }
       break;
     }
     
@@ -1008,6 +1019,7 @@ class SearchSessionImpl implements SearchSession {
   private bestMove: Move | null = null;
   private bestScore = 0;
   private bestDepth = 0;
+  private hasPartialResult = false;
   private lastScore = 0;
   private nextDepth = 1;
 
@@ -1057,6 +1069,7 @@ class SearchSessionImpl implements SearchSession {
     this.bestScore = clampStaticScore(this.bestScore +
       (this.player === BLACK ? this.scoreBlack - this.scoreWhite : this.scoreWhite - this.scoreBlack) * pointValue(this.scoreToWin));
     this.bestDepth = 0;
+    this.hasPartialResult = false;
     this.lastScore = this.bestScore;
     this.nextDepth = 1;
   }
@@ -1170,6 +1183,12 @@ class SearchSessionImpl implements SearchSession {
       }
 
       if (searchAborted) {
+        if (this.bestDepth === 0 && result.move !== null &&
+            (!this.hasPartialResult || result.score > this.bestScore)) {
+          this.bestMove = result.move;
+          this.bestScore = result.score;
+          this.hasPartialResult = true;
+        }
         break;
       }
 
@@ -1288,6 +1307,13 @@ export function findBestMove(
     filter: ((m: Move) => boolean) | null
   ): boolean {
     if (scoreToWin === 0) return false;
+    const sideScore = side === BLACK ? quickCtx.scoreBlack : quickCtx.scoreWhite;
+    if (filter === null && sideScore + 1 >= scoreToWin) {
+      // Legal pair placements cannot extend each other's line without an enemy
+      // shield between them. Any scoring pair therefore has a scoring single.
+      // A rift only awards points to the removed color, never to its mover.
+      return getSingleStoneWinningSquares(board, side).length > 0;
+    }
     const candidates = getRootMoves(board, side, filter, {
       scores: { black: quickCtx.scoreBlack, white: quickCtx.scoreWhite },
       scoreToWin: quickCtx.scoreToWin,

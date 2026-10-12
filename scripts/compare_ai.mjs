@@ -16,14 +16,17 @@ const { values } = parseArgs({ options: {
   bundle: { type: 'boolean', default: false }, 'require-identical': { type: 'boolean', default: false },
   target: { type: 'string', default: '1' }, seed: { type: 'string', default: '101' },
   opening: { type: 'string', default: 'tactical' },
+  'book-width': { type: 'string', default: '12' },
   illegal: { type: 'string', default: 'forfeit' }, trace: { type: 'string' },
 } });
 assert.ok(values.reference, '--reference must point to an existing source checkout');
 const games = Number(values.games), time = Number(values.time), maxPlies = Number(values.plies);
 const target = Number(values.target), startSeed = Number(values.seed);
+const bookWidth = Number(values['book-width']);
 assert.ok(Number.isInteger(games) && games >= 0 && games % 2 === 0, 'games must be a nonnegative even integer');
 assert.ok(Number.isFinite(time) && time > 0 && Number.isInteger(maxPlies) && maxPlies > 0);
 assert.ok(Number.isInteger(target) && target > 0 && Number.isInteger(startSeed));
+assert.ok(Number.isInteger(bookWidth) && bookWidth > 0, 'book-width must be a positive integer');
 assert.ok(['tactical', 'quiet', 'long-pro', 'long-pro-book', 'long-pro-full'].includes(values.opening));
 assert.ok(['forfeit', 'fallback'].includes(values.illegal));
 const longPro = values.opening.startsWith('long-pro');
@@ -81,7 +84,7 @@ function opening(seed) {
     }
     // Keep openings fixed while the candidate changes during an experiment.
     const moves = reference.generateAllMoves(b, side).filter(m => !longPro || m.move.action !== 'rift');
-    const offset = random(Math.min(12, moves.length));
+    const offset = random(Math.min(values.opening === 'long-pro-book' ? bookWidth : 12, moves.length));
     for (let j = 0; j < moves.length; j++) {
       const move = moves[(offset + j) % moves.length].move;
       const undo = current.makeMove(b, move, side);
@@ -158,6 +161,10 @@ for (let game = 0; game < games; game++) {
     assert.deepEqual(b, before, 'search must restore board state');
     let move = result.move;
     let repaired = false;
+    if (!legal(b, move, side, rootFilter) && values.illegal === 'forfeit') {
+      winner = side === currentColor ? 'reference' : 'current';
+      reason = 'illegal-move'; ply++; break;
+    }
     if (!legal(b, move, side, rootFilter) && values.illegal === 'fallback') {
       // Match the application's legality guard rather than awarding a forfeit.
       move = e.generateAllMoves(b, side, { scores, scoreToWin: target }).find(m => legal(b, m.move, side, rootFilter))?.move;
@@ -193,6 +200,7 @@ for (let game = 0; game < games; game++) {
 }
 console.log(JSON.stringify({ matchSummary: {
   games, timeMs: time, maxPlies, target, startSeed, bundled: values.bundle,
+  bookWidth: values.opening === 'long-pro-book' ? bookWidth : undefined,
   opening: values.opening === 'long-pro-full' ? 'long-pro from forced center; both engines choose all subsequent moves; identical start per pair' :
     values.opening === 'long-pro-book' ? 'long-pro with seeded White first pair; engines choose restricted Black second move; colors swapped per seed' :
     values.opening === 'long-pro' ? 'long-pro, three seeded legal opening plies; colors swapped per seed' :
@@ -201,6 +209,6 @@ console.log(JSON.stringify({ matchSummary: {
   currentWins: results.filter(r => r.winner === 'current').length,
   referenceWins: results.filter(r => r.winner === 'reference').length,
   draws: results.filter(r => r.winner === null).length,
-  illegalMoveForfeits: results.filter(r => r.reason === 'illegal-scoring-single').length,
+  illegalMoveForfeits: results.filter(r => r.reason === 'illegal-move' || r.reason === 'illegal-scoring-single').length,
   results,
 } }));

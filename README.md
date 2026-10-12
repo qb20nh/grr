@@ -148,9 +148,12 @@ Long Pro is the primary strength benchmark. `long-pro-full` starts after the
 forced center stone; both engines choose all subsequent moves, with the app's
 opening restrictions and reply filters. It has one fixed initial position, so
 repeated pairs are not independent samples. `long-pro-book` varies White's first
-pair and lets the engines choose Black's restricted second move. The older
+pair and lets the engines choose Black's restricted second move. The
+`--book-width 50` option widens the reference-ranked White opening pool from its
+default 12 candidates; record this setting when comparing results. The older
 `long-pro` mode seeds all three opening plies and is only an additional position
 suite. `quiet` supplies standard-rule midgame starts. Seeded starts are not
 certified balanced. These time-limited Node matches are not an Elo estimate or a browser
-worker/pondering benchmark. See [strength validation](docs/ai-strength-validation.md)
+worker/pondering benchmark. See [the latest search follow-up](docs/ai-strength-followup.md)
+and [earlier strength validation](docs/ai-strength-validation.md)
 for measurements and limitations.
