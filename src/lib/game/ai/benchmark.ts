@@ -9,6 +9,8 @@ import type { Board, Color } from './types';
 import { BLACK, WHITE } from './types';
 import { boardFrom2D } from './board';
 import { iterativeDeepening, getSearchStats } from './search';
+import { clearTranspositionTable } from './transposition';
+import { clearMoveOrdering } from './moveOrder';
 
 export interface NpsBenchmarkConfig {
   /** Time budget per position (ms). */
@@ -161,7 +163,7 @@ export function runNpsBenchmark(partial?: Partial<NpsBenchmarkConfig>): NpsBench
     let sumMs = 0;
     let sumDepth = 0;
 
-    // Warm-up once (JIT, caches). Do not count.
+    // Warm up JIT, then discard search state so repetitions do equal work.
     {
       const b = buildBoard(c);
       iterativeDeepening(b, c.toMove, Math.min(50, config.timeLimitMs), Math.min(6, config.maxDepth), {
@@ -171,6 +173,8 @@ export function runNpsBenchmark(partial?: Partial<NpsBenchmarkConfig>): NpsBench
     }
 
     for (let i = 0; i < config.iterations; i++) {
+      clearTranspositionTable();
+      clearMoveOrdering();
       const b = buildBoard(c);
       const res = iterativeDeepening(b, c.toMove, config.timeLimitMs, config.maxDepth, {
         preserveMoveOrdering: true,

@@ -8,7 +8,7 @@ import type { Board, CellIndex, Color, Move, ScoredMove, ReinforceMove, RiftMove
 import { EMPTY, BLACK, WHITE } from './types';
 import { getOpponent, createReinforceMove, createSingleWinMove, createRiftMove, isSingleWinMove, toIndex, inBounds } from './utils';
 import { isValidPlacement, checkColinearityConstraint, validateReinforce } from './board';
-import { evaluateSinglePosition, evaluateReinforceMove } from './synergy';
+import { evaluateSinglePosition, evaluateReinforceMove, createReinforceScorer } from './synergy';
 import { evaluateRiftTarget, findWinningPositions, findWinningPositionsAssumingKoClears, getBlockingMask, riftBreaksThreat } from './threats';
 import type { BlockingMask } from './threats';
 
@@ -178,8 +178,10 @@ export function generateReinforceMoves(
     if (blocking.mask[i] === blocking.stamp) blockingPositions.push(i);
   }
 
+  const scorer = createReinforceScorer(board, player, blocking);
   const candidates = getCandidatePositions(board);
-  const scoredCandidates = scoreCandidates(board, candidates, player, blocking);
+  const scoredCandidates = candidates.map(pos => ({ pos, score: scorer.single(pos) }));
+  scoredCandidates.sort((a, b) => b.score - a.score);
   
   // Take top candidates for pair generation
   const topCandidates = scoredCandidates.slice(0, 25);
@@ -206,7 +208,7 @@ export function generateReinforceMoves(
     const SCORE_BONUS = 120000;
     const scoredSingles = scoringPositions.map(pos => ({
       pos,
-      score: evaluateSinglePosition(board, pos, player, blocking) + SCORE_BONUS,
+      score: scorer.single(pos) + SCORE_BONUS,
     }));
     scoredSingles.sort((a, b) => b.score - a.score);
     const topSingles = scoredSingles.slice(0, 6);
@@ -252,7 +254,7 @@ export function generateReinforceMoves(
         if (!isValidPlacement(board, blockPos2)) continue;
         if (!checkColinearityConstraint(board, blockPos, blockPos2, player)) continue;
         
-        const score = evaluateReinforceMove(board, blockPos, blockPos2, player, blocking);
+        const score = scorer.pair(blockPos, blockPos2);
         moves.push({
           move: createReinforceMove(blockPos, blockPos2),
           score: score + 500000, // HUGE bonus for double block
@@ -265,7 +267,7 @@ export function generateReinforceMoves(
         if (cand.pos === blockPos) continue;
         if (!checkColinearityConstraint(board, blockPos, cand.pos, player)) continue;
         
-        const score = evaluateReinforceMove(board, blockPos, cand.pos, player, blocking);
+        const score = scorer.pair(blockPos, cand.pos);
         moves.push({
           move: createReinforceMove(blockPos, cand.pos),
           score: score + 300000, // Large bonus for blocking
@@ -287,7 +289,7 @@ export function generateReinforceMoves(
       }
       
       // Score the pair
-      const score = evaluateReinforceMove(board, pos1, pos2, player, blocking);
+      const score = scorer.pair(pos1, pos2);
       
       // Bonus if one or both are blocking moves
       let finalScore = score;
@@ -442,6 +444,8 @@ export function generateTacticalMoves(
   // - Any move using known blocking squares (pattern-based critical defense)
   // - High-impact rifts that break threats
   const opponentWinSquares = findWinningPositionsAssumingKoClears(board, opponent);
+  // Generate first: reinforce generation overwrites the shared blocking scratch mask.
+  const reinforceMoves = generateReinforceMoves(board, player, match);
   // Ko is temporary; for quiescence we want blocks that remain relevant once Ko clears.
   const blocking = getBlockingMask(board, player, true);
 
@@ -457,7 +461,6 @@ export function generateTacticalMoves(
   const tactical: ScoredMove[] = [];
 
   // Reinforce candidates are already bounded to CONFIG.MAX_PAIRS and ordered by heuristic score.
-  const reinforceMoves = generateReinforceMoves(board, player, match);
   for (const m of reinforceMoves) {
     const mv = m.move;
     if (mv.action !== 'reinforce') continue;

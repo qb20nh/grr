@@ -20,6 +20,7 @@ interface SharedTTLayout {
   agesOffset: number;
   flagsOffset: number;
   movesOffset: number;
+  versionsOffset: number;
 }
 
 function alignOffset(offset: number, alignment: number): number {
@@ -54,6 +55,9 @@ function computeSharedTTLayout(size: number): SharedTTLayout {
   const movesOffset = offset;
   offset += size * 4;
 
+  const versionsOffset = offset;
+  offset += size * 4;
+
   return {
     totalBytes: offset,
     keysOffset,
@@ -62,6 +66,7 @@ function computeSharedTTLayout(size: number): SharedTTLayout {
     agesOffset,
     flagsOffset,
     movesOffset,
+    versionsOffset,
   };
 }
 
@@ -91,6 +96,7 @@ export class TranspositionTable {
   private ages: Uint16Array;
   private flags: Uint8Array;
   private moves: Int32Array;
+  private versions: Int32Array | null = null;
   private size: number;
   private assoc: number;
   private sets: number;
@@ -137,6 +143,7 @@ export class TranspositionTable {
       this.ages = new Uint16Array(buffer, layout.agesOffset, size);
       this.flags = new Uint8Array(buffer, layout.flagsOffset, size);
       this.moves = new Int32Array(buffer, layout.movesOffset, size);
+      this.versions = new Int32Array(buffer, layout.versionsOffset, size);
     }
 
     this.currentAge = 0;
@@ -169,9 +176,7 @@ export class TranspositionTable {
   }
 
   private loadScore(idx: number): number {
-    // NOTE: In shared-TT mode we intentionally avoid Atomics on the hot-path payload fields
-    // (score/depth/age/flag/move) to reduce overhead. We rely on an atomic key commit
-    // (store key last, load key first/last) to avoid using torn entries.
+    // Shared payload reads are guarded by the per-slot sequence version.
     return this.scores[idx];
   }
 
@@ -254,14 +259,17 @@ export class TranspositionTable {
       return null;
     }
 
-    // Load fields, then re-check key to avoid torn reads (shared TT).
+    const version = this.versions ? Atomics.load(this.versions, idx) : 0;
+    if (version & 1) return null;
+    // A key check alone misses overlapping writers and same-key (ABA) updates.
     const storedAge = this.loadAge(idx);
     const storedDepth = this.loadDepth(idx);
     const storedScore = this.loadScore(idx);
     const storedFlagCode = this.loadFlagCode(idx);
     const storedMoveCode = this.loadMoveCode(idx);
     const k2 = this.loadKey(idx);
-    if (k2 !== key || storedDepth === 0) {
+    if (k2 !== key || storedDepth === 0 ||
+        (this.versions && Atomics.load(this.versions, idx) !== version)) {
       return null;
     }
 
@@ -327,7 +335,12 @@ export class TranspositionTable {
       }
     }
 
-    // Shared-TT safety: clear key first so other threads won't match this slot mid-write.
+    // Claim the slot without waiting. Contended cache writes may be dropped safely.
+    const version = this.versions ? Atomics.load(this.versions, idx) : 0;
+    if (this.versions && ((version & 1) ||
+        Atomics.compareExchange(this.versions, idx, version, (version + 1) | 0) !== version)) return;
+
+    // Invalidate while writing, then publish key and even version after the payload.
     if (this.isShared) {
       this.storeKey(idx, 0n);
     }
@@ -341,6 +354,7 @@ export class TranspositionTable {
     this.storeAge(idx, this.currentAge);
     // Commit key last (makes entry visible).
     this.storeKey(idx, key);
+    if (this.versions) Atomics.store(this.versions, idx, (version + 2) | 0);
   }
   
   /**
@@ -380,14 +394,16 @@ export class TranspositionTable {
       return [false, 0, null];
     }
 
-    // Load fields, then re-check key to avoid torn reads (shared TT).
+    const version = this.versions ? Atomics.load(this.versions, idx) : 0;
+    if (version & 1) return [false, 0, null];
     const storedAge = this.loadAge(idx);
     const storedDepth = this.loadDepth(idx);
     const storedMoveCode = this.loadMoveCode(idx);
     const storedScoreRaw = this.loadScore(idx);
     const storedFlagCode = this.loadFlagCode(idx);
     const k2 = this.loadKey(idx);
-    if (k2 !== key || storedDepth === 0) {
+    if (k2 !== key || storedDepth === 0 ||
+        (this.versions && Atomics.load(this.versions, idx) !== version)) {
       return [false, 0, null];
     }
 
@@ -434,7 +450,7 @@ export class TranspositionTable {
   }
   
   /**
-   * Clear the entire table
+   * Clear the entire table. Shared workers must be idle before calling this.
    */
   clear(): void {
     this.keys.fill(0n);
@@ -443,6 +459,7 @@ export class TranspositionTable {
     this.ages.fill(0);
     this.flags.fill(0);
     this.moves.fill(MOVE_CODE_NONE);
+    this.versions?.fill(0);
     this.currentAge = 0;
     this.hits = 0;
     this.misses = 0;

@@ -60,6 +60,8 @@ export const CONFIG = {
   INFINITY: 10000000,
   WIN_SCORE: 9000000,
   LOSS_SCORE: -9000000,
+  // Heuristics must never enter the terminal/mate-distance score range.
+  MAX_STATIC_SCORE: 8000000,
 
   // NNUE (optional) evaluation scaling
   // NNUE returns [-1, 1]; we map it into the engine score domain with this multiplier.

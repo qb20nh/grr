@@ -171,6 +171,10 @@ export function evaluateHandcrafted(board: Board, player: Color): number {
  */
 export const evaluate = evaluateHandcrafted;
 
+export function clampStaticScore(score: number): number {
+  return Math.max(-CONFIG.MAX_STATIC_SCORE, Math.min(CONFIG.MAX_STATIC_SCORE, score));
+}
+
 /**
  * Search evaluation entrypoint.
  *
@@ -182,12 +186,12 @@ export function evaluateSearch(board: Board, player: Color, nnue: NnueState | nu
     const v = nnue.evaluateValue(board, player); // [-1, 1]
     // Clamp defensively against any NaN/Infinity coming from bad weights.
     if (!Number.isFinite(v)) {
-      return evaluateHandcrafted(board, player);
+      return clampStaticScore(evaluateHandcrafted(board, player));
     }
     return Math.round(v * CONFIG.NNUE_VALUE_SCALE);
   }
 
-  return evaluateHandcrafted(board, player);
+  return clampStaticScore(evaluateHandcrafted(board, player));
 }
 
 /**

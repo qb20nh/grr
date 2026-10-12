@@ -3,7 +3,7 @@
  * Evaluates how well two stones work together
  */
 
-import { BOARD_SIZE, SYNERGY_BONUS, DIRECTIONS } from './constants';
+import { BOARD_SIZE, BOARD_CELLS, SYNERGY_BONUS, DIRECTIONS } from './constants';
 import type { Board, CellIndex, Color } from './types';
 import { EMPTY } from './types';
 import { manhattanDistance, getOpponent, areColinear, toIndex, inBounds } from './utils';
@@ -226,14 +226,24 @@ function countThreatsAtPosition(
 /**
  * Evaluate how good a single position is for placement
  */
-export function evaluateSinglePosition(
+interface PlacementEvaluation {
+  score: number;
+  threats: number;
+  attacks: boolean;
+  wins: boolean;
+}
+
+function analyzePlacement(
   board: Board,
   pos: CellIndex,
   player: Color,
   blocking?: BlockingMask
-): number {
+): PlacementEvaluation {
   const opponent = getOpponent(player);
   let score = 0;
+  let threats = 0;
+  let attacks = false;
+  let wins = false;
   
   // Temporarily place
   const orig = board.cells[pos];
@@ -243,6 +253,11 @@ export function evaluateSinglePosition(
   for (let dir = 0; dir < 4; dir++) {
     const info = scanLine(board, pos, dir, player);
     const pattern = classifyLine(info);
+
+    if (pattern === 'FIVE' || pattern === 'OPEN_FOUR') attacks = true;
+    if (pattern === 'FIVE') wins = true;
+    if (pattern === 'FIVE' || pattern === 'OPEN_FOUR' ||
+        pattern === 'GAP_FOUR' || pattern === 'HALF_FOUR' || pattern === 'OPEN_THREE') threats++;
     
     switch (pattern) {
       case 'FIVE':
@@ -314,7 +329,53 @@ export function evaluateSinglePosition(
   const distFromCenter = Math.abs(row - center) + Math.abs(col - center);
   score += Math.max(0, (14 - distFromCenter) * 2);
   
-  return score;
+  return { score, threats, attacks, wins };
+}
+
+export function evaluateSinglePosition(
+  board: Board,
+  pos: CellIndex,
+  player: Color,
+  blocking?: BlockingMask
+): number {
+  return analyzePlacement(board, pos, player, blocking).score;
+}
+
+/**
+ * Reuse placement analysis within ONE move-generation call. Legal reinforce pairs
+ * are either non-collinear or separated by an enemy shield. In both cases neither
+ * new stone can change the other's line patterns, so their analyses are independent.
+ * The board and blocking mask must remain unchanged while using this scorer.
+ */
+export function createReinforceScorer(board: Board, player: Color, blocking: BlockingMask) {
+  const cache: (PlacementEvaluation | undefined)[] = new Array(BOARD_CELLS);
+  const at = (pos: CellIndex): PlacementEvaluation =>
+    cache[pos] ??= analyzePlacement(board, pos, player, blocking);
+
+  return {
+    single: (pos: CellIndex): number => at(pos).score,
+    pair: (pos1: CellIndex, pos2: CellIndex): number => {
+      const a = at(pos1);
+      const b = at(pos2);
+      if (a.wins || b.wins) return 10000000;
+
+      let synergy = 0;
+      if (usesShieldException(board, pos1, pos2, player)) {
+        synergy += SYNERGY_BONUS.SHIELD_JUMP;
+        if (extendsSameLine(board, pos1, pos2, player)) synergy += SYNERGY_BONUS.SAME_LINE_EXTENSION;
+      }
+      const threats = a.threats + b.threats;
+      if (threats >= 2) synergy += SYNERGY_BONUS.DUAL_THREAT * threats;
+      if ((a.attacks && blocksOpponentThreat(board, pos2, player, blocking)) ||
+          (b.attacks && blocksOpponentThreat(board, pos1, player, blocking))) {
+        synergy += SYNERGY_BONUS.ATTACK_DEFEND;
+      }
+      const distance = manhattanDistance(pos1, pos2);
+      if (distance <= 3) synergy += SYNERGY_BONUS.PROXIMITY_CLOSE;
+      else if (distance <= 5) synergy += SYNERGY_BONUS.PROXIMITY_MEDIUM;
+      return a.score + b.score + synergy;
+    },
+  };
 }
 
 /**

@@ -3,7 +3,7 @@
  * Identifies urgent tactical situations
  */
 
-import { BOARD_CELLS } from './constants';
+import { BOARD_SIZE, BOARD_CELLS, DIRECTIONS } from './constants';
 import type { Board, CellIndex, Color, Fork, PatternCounts } from './types';
 import { ThreatLevel, EMPTY } from './types';
 import { getOpponent } from './utils';
@@ -262,8 +262,8 @@ export function findWinningPositions(board: Board, player: Color, ignoreKo: bool
 /**
  * Single source of truth: squares where placing ONE stone would immediately win (exact-5).
  *
- * This is derived by scanning existing stones for 4-threat patterns (OPEN/HALF/GAP four),
- * which is much faster than trying every empty cell.
+ * Scan maximal contiguous runs and combine the counts on either side of an empty
+ * endpoint. Pattern labels alone cannot distinguish XXXX_X from a legal exact five.
  */
 export function getSingleStoneWinningSquares(
   board: Board,
@@ -274,9 +274,20 @@ export function getSingleStoneWinningSquares(
   const stamp = nextWinStamp();
   const out: CellIndex[] = [];
 
-  const add = (idx: CellIndex): void => {
-    if (idx < 0) return;
+  const addEnd = (row: number, col: number, dr: number, dc: number, count: number): void => {
+    if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) return;
+    const idx = row * BOARD_SIZE + col;
+    if (board.cells[idx] !== EMPTY || (!ignoreKo && board.koPosition === idx)) return;
     if (WIN_MASK[idx] === stamp) return;
+    row += dr;
+    col += dc;
+    while (row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE &&
+           board.cells[row * BOARD_SIZE + col] === player && count < 5) {
+      count++;
+      row += dr;
+      col += dc;
+    }
+    if (count !== 4) return;
     WIN_MASK[idx] = stamp;
     out.push(idx);
   };
@@ -284,16 +295,23 @@ export function getSingleStoneWinningSquares(
   for (let pos = 0; pos < BOARD_CELLS; pos++) {
     if (board.cells[pos] !== player) continue;
 
-    for (let dir = 0; dir < 4; dir++) {
-      const info = scanLine(board, pos, dir, player, ignoreKo);
-      const pattern = classifyLine(info);
+    const row = Math.floor(pos / BOARD_SIZE);
+    const col = pos % BOARD_SIZE;
+    for (const [dr, dc] of DIRECTIONS) {
+      const beforeRow = row - dr, beforeCol = col - dc;
+      if (beforeRow >= 0 && beforeRow < BOARD_SIZE && beforeCol >= 0 && beforeCol < BOARD_SIZE &&
+          board.cells[beforeRow * BOARD_SIZE + beforeCol] === player) continue;
 
-      if (pattern === 'OPEN_FOUR' || pattern === 'HALF_FOUR') {
-        if (info.extendCount >= 1) add(info.extend1);
-        if (info.extendCount >= 2) add(info.extend2);
-      } else if (pattern === 'GAP_FOUR') {
-        if (info.gaps === 1) add(info.gapPos);
+      let count = 1, r = row + dr, c = col + dc;
+      while (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE &&
+             board.cells[r * BOARD_SIZE + c] === player && count < 5) {
+        count++;
+        r += dr;
+        c += dc;
       }
+      if (count >= 5) continue;
+      addEnd(beforeRow, beforeCol, -dr, -dc, count);
+      addEnd(r, c, dr, dc, count);
     }
   }
 

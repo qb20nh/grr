@@ -262,6 +262,8 @@ This section lists the main performance-oriented techniques that are implemented
   - TT uses typed arrays (`BigUint64Array` keys + compact typed fields) and 2-way set associativity: `src/lib/game/ai/transposition.ts`.
   - Moves are encoded into a signed 32-bit integer for TT/heuristic storage (`moveCodec.ts`), avoiding object allocation in caches: `src/lib/game/ai/moveCodec.ts`.
   - Mate-distance/terminal scores are stored in a ply-neutral form in TT so they remain valid across transpositions: `src/lib/game/ai/transposition.ts` (`toTTScore`/`fromTTScore`).
+  - Shared slots have atomic sequence versions: writers claim a slot without waiting, and readers reject overlapping updates, including same-key rewrites. This adds four bytes per shared entry; non-shared tables do not allocate versions.
+  - While opening filters are pending, search uses cached move hints only. Filter-dependent scores are neither read nor written because callback identity and future opening restrictions are absent from the board hash.
 
 - **Stamp-based scratch masks (replace `Set` allocations in hot paths)**
   - Candidate generation de-dup uses a `Uint32Array` “seen” mask with an incrementing stamp (`CANDIDATE_SEEN`): `src/lib/game/ai/moveGen.ts`.
@@ -274,6 +276,8 @@ This section lists the main performance-oriented techniques that are implemented
 - **Precomputed tables (movegen + evaluation)**
   - Candidate neighbor lists within `CONFIG.CANDIDATE_RADIUS` are precomputed once (`NEIGHBORS`) for fast “near-stone” candidate enumeration: `src/lib/game/ai/moveGen.ts`.
   - `CENTER_BONUS` is precomputed for positional scoring: `src/lib/game/ai/constants.ts`.
+  - `createReinforceScorer` evaluates each candidate placement once per generation call. Legal pairs cannot alter each other's line patterns: they are non-collinear or separated by an opponent stone. Pair scoring reuses those independent results, including attack and fork information.
+  - Single-stone scoring squares come from exact contiguous-run counts, including stones across a gap. A pattern label is insufficient: filling `XXXX_X` produces an overline, not a score.
 
 - **Branching-factor control by construction**
   - Candidate/move list sizes are capped (`CONFIG.MAX_CANDIDATES`, `CONFIG.MAX_PAIRS`, `CONFIG.MAX_RIFTS`), and root search additionally uses progressive widening: `src/lib/game/ai/constants.ts`, `src/lib/game/ai/moveGen.ts`, `src/lib/game/ai/search.ts`.
@@ -287,26 +291,30 @@ This section lists the main performance-oriented techniques that are implemented
   - `ScoredMove.orderScore` is stored on the move objects to avoid allocating parallel “order score” arrays per node: `src/lib/game/ai/types.ts`, `src/lib/game/ai/moveOrder.ts`.
   - Some tactical “danger” checks are computed lazily and cached per node to avoid repeated threat scans (`cachedDanger`): `src/lib/game/ai/search.ts`.
   - Iterative deepening stops via a small `TimeState` gate (soft/hard limits) rather than only “time up” checks: `src/lib/game/ai/timeManager.ts`, `src/lib/game/ai/search.ts`.
+  - Search depth decreases on every move, with bounded quiescence at the frontier. Repeated tactical moves cannot keep the nominal depth fixed indefinitely.
+  - PVS keeps the established best move on equal returned scores, since a null-window fail-low bound does not establish a genuine tie. Quiescence cannot stand pat or delta-prune defenses against an immediate scoring threat.
 
 - **Evaluation hot-path micro-optimizations**
   - Pattern scoring avoids `Object.entries` and similar allocation-heavy constructs in the evaluation hot path: `src/lib/game/ai/evaluate.ts`.
+  - Nonterminal heuristic scores, including match-point adjustments, are bounded below the mate-score range. Large fork penalties cannot be mistaken for a proven loss or trigger a false resignation.
 
 - **TSS (tactical prover) bounded + memoized**
   - Threat space search is bounded by `maxPlies/maxAttackerMoves/maxDefenderMoves`, memoizes by `withTurn(hash,toMove)`-derived keys, and keeps a small cross-call root cache: `src/lib/game/ai/tss.ts`.
   - TSS uses compact move encoding in memo entries (`encodeMove`/`decodeMove`) to keep caches small: `src/lib/game/ai/tss.ts`, `src/lib/game/ai/moveCodec.ts`.
+  - TSS receives at most 30% of the remaining timed budget, capped at 2.5 seconds. Defensive hints do not bypass the remaining full search. TSS is skipped when opening filters are pending because it does not model them.
 
 - **NNUE incremental evaluation (fast leaf eval + ordering assistance)**
   - Incremental accumulator (`NnueState`) supports O(hiddenDim) updates per move and avoids re-evaluating from scratch: `src/lib/game/ai/nnue/evaluator.ts`.
   - Root move ordering optionally rescoring the top-K moves with NNUE uses cheap “apply move → eval → unapply move” loops: `src/lib/game/ai/search.ts`.
-  - NNUE weights are optional; runtime falls back to handcrafted eval when missing/corrupt: `src/lib/game/ai/nnue/weights.ts`, `src/lib/game/ai/evaluate.ts`.
+  - NNUE updates include all stones cleared by scoring and restore them on undo, including rifts that award points to the opponent. Current browser workers pass null weights; optional NNUE remains available to direct search/training callers.
 
 - **Worker-level reuse + responsiveness**
-  - NNUE weight loading is cached via a single promise to avoid repeated fetch/parse work: `src/lib/game/ai.worker.ts`.
   - Pondering uses two search sessions (root prediction + reply) and reuses the reply session on a ponder hit via `SearchSession.searchSlice`, preserving TT/history/PV state: `src/lib/game/ai.worker.ts`, `src/lib/game/ai/search.ts`.
   - The ponder loop yields to the worker event loop (`setTimeout(resolve, 0)`) to remain responsive under continuous background search: `src/lib/game/ai.worker.ts`.
 
 - **Measurement & regression harnesses (supporting performance work)**
-  - Nodes/sec benchmark with warm-up to reduce JIT noise: `src/lib/game/ai/benchmark.ts`.
+  - Nodes/sec benchmark with warm-up and fresh TT/history for each measured repetition: `src/lib/game/ai/benchmark.ts`.
+  - `scripts/compare_ai.mjs` compares fixed move-generation workloads and paired, color-swapped matches against a separate source checkout. `scripts/*.test.mjs` provide deterministic correctness checks plus a concurrent shared-TT stress test.
   - Tactical regression puzzles cover tricky edge cases (including overline/Ko) and guard against known move-selection pathologies; useful when refactoring for performance: `src/lib/game/ai/puzzles.ts`, `scripts/run_puzzles.ts`.
 
 ### Appendix: module map

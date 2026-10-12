@@ -78,7 +78,7 @@ python training/cycle.py --cycles 1 --games 50
 
 - **Best (canonical)**: `training/best/weights.bin`
 - **App-consumed (bundled when present)**: `static/nnue/weights.bin`
-  - The app/worker loads `(<base>/nnue/weights.bin)`. If missing/corrupt, NNUE is disabled and the AI falls back to handcrafted eval/search.
+  - The optional loader resolves `(<base>/nnue/weights.bin)`. Current browser workers explicitly use handcrafted evaluation; the search/training API can accept NNUE weights. The loader returns null for missing/corrupt weights.
     - Dev: `/nnue/weights.bin`
     - Prod (this repo’s static base path): `/grr/nnue/weights.bin`
 
@@ -103,3 +103,29 @@ The dashboard includes a small control panel to start training cycles using pres
 - **rigorous**: slower but higher-confidence eval
 
 Click **Start** to run `training/cycle.py` with the selected preset. The UI shows live logs and will refresh the runs list when the job finishes.
+
+## AI verification and comparison
+
+```sh
+pnpm test:ai
+pnpm bench:ai
+pnpm check
+pnpm build
+```
+
+`test:ai` covers exact-five/overline detection, ko, legal pair-scoring equivalence,
+bounded tactical search, PVS bounds, opening-filter cache isolation, NNUE scoring
+and undo, and concurrent shared-TT writers, followed by the tactical puzzles.
+The benchmark warms up JavaScript and resets TT/history between measured searches.
+
+To compare an older checkout with the current engine:
+
+```sh
+node --import tsx scripts/compare_ai.mjs --reference ../grr-baseline --games 16 --time 100
+```
+
+This prints JSON lines for equal-work move-generation timings and color-swapped
+matches from paired openings. Matches use a one-point target, an 80-ply cap and
+threefold-repetition adjudication. Illegal scoring singles are reported as
+forfeits; this harness does not model the UI's fallback for rejected moves.
+These small, time-limited matches are a regression check, not an Elo estimate.
