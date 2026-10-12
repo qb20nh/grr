@@ -132,13 +132,25 @@ To compare an older checkout with the current engine:
 ```sh
 node scripts/bench_ai.mjs --root ../grr-baseline --benchIters 5 --benchTimeMs 400
 node scripts/bench_ai.mjs --benchIters 5 --benchTimeMs 400
-node --import tsx scripts/compare_ai.mjs --reference ../grr-baseline --bundle --games 16 --time 500 --opening quiet
+node --import tsx scripts/compare_ai.mjs --reference ../grr-baseline --bundle --games 20 --time 600 --opening long-pro-book --illegal fallback --seed 14001
+node --import tsx scripts/compare_ai.mjs --reference ../grr-baseline --bundle --games 2 --time 5000 --opening long-pro-full --illegal fallback
 ```
 
 This prints JSON lines for equal-work move-generation timings and color-swapped
 matches from paired openings. Use `--require-identical` to assert unchanged move
 generation during a pure speed experiment. Defaults use a one-point target
 (`--target 3` tests score clearing), an 80-ply cap and
-threefold-repetition adjudication. Illegal scoring singles are reported as
-forfeits; this harness does not model the UI's fallback for rejected moves.
-These small, time-limited matches are a regression check, not an Elo estimate.
+threefold-repetition adjudication. `--illegal fallback` models the application's
+legal-move replacement instead of awarding wins for illegal scoring singles;
+the default `forfeit` mode remains available for legality diagnostics.
+`--trace /tmp/grr-game` saves board states and move/search statistics for replay.
+Long Pro is the primary strength benchmark. `long-pro-full` starts after the
+forced center stone; both engines choose all subsequent moves, with the app's
+opening restrictions and reply filters. It has one fixed initial position, so
+repeated pairs are not independent samples. `long-pro-book` varies White's first
+pair and lets the engines choose Black's restricted second move. The older
+`long-pro` mode seeds all three opening plies and is only an additional position
+suite. `quiet` supplies standard-rule midgame starts. Seeded starts are not
+certified balanced. These time-limited Node matches are not an Elo estimate or a browser
+worker/pondering benchmark. See [strength validation](docs/ai-strength-validation.md)
+for measurements and limitations.

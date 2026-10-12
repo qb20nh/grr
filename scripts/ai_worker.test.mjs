@@ -23,9 +23,13 @@ test('application worker returns legal moves for opening, scoring and ko states'
     const fixtures = [
       { stones: [], color: 1, opening: 'long-pro', index: 0 },
       { stones: [[1,7,7]], color: 2, opening: 'long-pro', index: 1 },
+      { stones: [[1,7,7],[2,6,6],[2,8,8]], color: 1, opening: 'long-pro', index: 2 },
       { stones: [[1,7,3],[1,7,4],[1,7,5],[1,7,6],[1,7,8]], color: 1 },
       { stones: [[2,7,0],[2,7,1],[2,7,2],[2,7,3],[1,5,5],[1,9,9]], color: 1, ko: {row:7,col:4} },
       { stones: [[1,7,3],[1,7,4],[1,7,5],[1,7,6],[2,2,2]], color: 1, target: 3 },
+      // Even a mate-coded selective search must return a legal move, not resign.
+      { stones: [[2,5,3],[2,5,4],[2,5,5],[2,5,6],
+        [2,9,3],[2,9,4],[2,9,5],[2,9,6],[1,7,7]], color: 1 },
     ];
     for (const f of fixtures) {
       const grid = Array.from({length:15}, () => Array(15).fill(null));
@@ -39,6 +43,7 @@ test('application worker returns legal moves for opening, scoring and ko states'
       const [result] = await response;
       assert.equal(result.type, 'result');
       assert.equal(result.error, undefined, JSON.stringify(result));
+      assert.equal(result.resign, undefined, JSON.stringify(result));
       assert.ok(result.move, JSON.stringify(result));
       const { action, positions } = result.move;
       const b = boardFrom2D(grid, f.ko ? f.ko.row * 15 + f.ko.col : null);
@@ -54,6 +59,11 @@ test('application worker returns legal moves for opening, scoring and ko states'
         assert.equal(checkWinAt(b, indices[0], f.color), true);
       }
       if (f.index === 1) assert.equal(action, 'reinforce');
+      if (f.index === 2) {
+        assert.equal(action, 'reinforce');
+        assert.equal(indices.length, 2);
+        for (const p of positions) assert.ok(Math.abs(p.row - 7) + Math.abs(p.col - 7) >= 3);
+      }
     }
   } finally {
     await worker.terminate();

@@ -13,7 +13,7 @@ import { makeMove, unmakeMove, validateReinforce } from './board';
 import { scanLine, classifyLine } from './patterns';
 import { getSingleStoneWinningSquares } from './threats';
 import { withTurn } from './zobrist';
-import { getCandidatePositions, scoreCandidates } from './moveGen';
+import { getCandidatePositions, scoreCandidates, generateAllMoves } from './moveGen';
 import { decodeMove, encodeMove, MOVE_CODE_NONE } from './moveCodec';
 
 type TssStatus = 'proven_win' | 'not_proven' | 'timeout';
@@ -144,57 +144,17 @@ function riftCreatesWinForRemovedColor(board: Board, riftPos: CellIndex, removed
 }
 
 function generateForcingAttackerMoves(board: Board, attacker: Color, limit: number): Move[] {
-  const defender = getOpponent(attacker);
-  const moves: Move[] = [];
-
-  // 1) Rift candidates (attacker-side tactic): removing a defender stone can create a Ko-locked
-  // winning square the defender can't occupy immediately.
-  //
-  // We keep this bounded by only considering defender stones near attacker stones.
-  const riftTargets: { pos: CellIndex; score: number }[] = [];
-  for (let pos = 0; pos < 225; pos++) {
-    if (board.cells[pos] !== defender) continue;
-
-    const row = Math.floor(pos / 15);
-    const col = pos % 15;
-
-    let adjacentAttackers = 0;
-    for (let dr = -1; dr <= 1; dr++) {
-      for (let dc = -1; dc <= 1; dc++) {
-        if (dr === 0 && dc === 0) continue;
-        const r = row + dr;
-        const c = col + dc;
-        if (r < 0 || r >= 15 || c < 0 || c >= 15) continue;
-        if (board.cells[r * 15 + c] === attacker) adjacentAttackers++;
-      }
-    }
-
-    if (adjacentAttackers > 0) {
-      riftTargets.push({ pos, score: adjacentAttackers });
-    }
+  const forcing: Move[] = [];
+  for (const { move } of generateAllMoves(board, attacker)) {
+    const undo = makeMove(board, move, attacker);
+    const safe = move.action !== 'rift' || !riftCreatesWinForRemovedColor(board, move.pos, getOpponent(attacker));
+    const threats = safe ? getImmediateWinSquares(board, attacker, 'ignoreKo') : [];
+    unmakeMove(board, undo, attacker);
+    if (threats.length > 0) forcing.push(move);
   }
-
-  riftTargets.sort((a, b) => b.score - a.score);
-  const riftQuota = Math.min(limit, 6);
-  for (let i = 0; i < riftTargets.length && moves.length < riftQuota; i++) {
-    moves.push(createRiftMove(riftTargets[i].pos));
-  }
-
-  // 2) Reinforce candidates: pair top empty squares (Ko-aware).
-  const candidates = scoreCandidates(board, getCandidatePositions(board), attacker);
-  const top = candidates.slice(0, Math.min(18, candidates.length));
-
-  // Pair top candidates (ordered by single-position score)
-  for (let i = 0; i < top.length && moves.length < limit; i++) {
-    for (let j = i + 1; j < top.length && moves.length < limit; j++) {
-      const a = top[i].pos;
-      const b = top[j].pos;
-      if (!validateReinforce(board, a, b, attacker)) continue;
-      moves.push(createReinforceMove(a, b));
-    }
-  }
-
-  return moves;
+  // Apply the effort limit only after checking whether a move actually forces
+  // a reply. Otherwise nonforcing pairs can consume the entire attacker quota.
+  return forcing.slice(0, limit);
 }
 
 function generateDefenderReplies(

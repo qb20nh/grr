@@ -12,13 +12,13 @@ import { evaluateSearch, isQuietPosition, clampStaticScore } from './evaluate';
 import { generateAllMoves, generateTacticalMoves } from './moveGen';
 import { orderMoves, updateKillerMoves, updateHistory, updateCounterMove, updateContinuationHistory, clearMoveOrdering, PVTable, isInterestingMove, getLMRReduction, getFutilityMargin } from './moveOrder';
 import { getTranspositionTable, TranspositionTable } from './transposition';
-import { hasCriticalThreat, getSingleStoneWinningSquares } from './threats';
+import { hasCriticalThreat, getSingleStoneWinningSquares, getBlockingMask } from './threats';
 import { createTimeState, shouldStopSearch } from './timeManager';
 import { withTurn } from './zobrist';
 import { threatSpaceSearch } from './tss';
 import type { NnueWeights } from './nnue/weights';
 import { NnueState } from './nnue/evaluator';
-import { evaluateReinforceMove } from './synergy';
+import { createReinforceScorer } from './synergy';
 
 // Search statistics
 let nodesSearched = 0;
@@ -165,6 +165,7 @@ function generateFallbackRootMoves(
   filter: (m: Move) => boolean
 ): ScoredMove[] {
   const empties = getEmptyPositions(board);
+  const scorer = createReinforceScorer(board, player, getBlockingMask(board, player));
 
   const out: ScoredMove[] = [];
 
@@ -177,7 +178,7 @@ function generateFallbackRootMoves(
       if (!validateReinforce(board, a, b, player)) continue;
       const move = createReinforceMove(a, b);
       if (!filter(move)) continue;
-      const score = evaluateReinforceMove(board, a, b, player);
+      const score = scorer.pair(a, b);
       out.push({ move, score, orderScore: score });
     }
   }
@@ -308,6 +309,13 @@ function quiescence(
   if (winnerNow !== null) {
     return scoreForMatchWinner(winnerNow, player, ply);
   }
+
+  // A legal scoring move on match point is exact even at the quiescence horizon.
+  const ownScore = player === BLACK ? ctx.scoreBlack : ctx.scoreWhite;
+  if (ctx.scoreToWin > 0 && ownScore + 1 >= ctx.scoreToWin &&
+      getSingleStoneWinningSquares(ctx.board, player).length > 0) {
+    return scoreForMatchWinner(player, player, ply + 1);
+  }
   
   // Stand-pat evaluation
   const standPat = evaluateWithMatch(ctx, player);
@@ -327,24 +335,19 @@ function quiescence(
   if (!mustDefend && standPat > localAlpha) {
     localAlpha = standPat;
   }
-  
-  // Check if position is quiet enough to stop
-  if (!mustDefend && isQuietPosition(ctx.board, player)) {
-    return standPat;
-  }
-  
   // Generate only tactical moves
   const tacticalMoves = generateTacticalMoves(ctx.board, player, {
     scores: { black: ctx.scoreBlack, white: ctx.scoreWhite },
     scoreToWin: ctx.scoreToWin,
   });
+  const opponentScore = player === BLACK ? ctx.scoreWhite : ctx.scoreBlack;
+  if (tacticalMoves.length === 0) {
+    return mustDefend && ctx.scoreToWin > 0 && opponentScore + 1 >= ctx.scoreToWin
+      ? scoreForMatchWinner(getOpponent(player), player, ply + 2) : standPat;
+  }
   
-  for (const { move, score } of tacticalMoves) {
-    // Delta pruning - skip moves that can't possibly improve alpha
-    if (!mustDefend && standPat + score + 50000 < localAlpha) {
-      continue;
-    }
-    
+  for (const { move } of tacticalMoves) {
+    // A low ordering score does not bound the value of a forcing attack.
     const undoInfo = applyMove(ctx, move, player);
     const winner = getMatchWinner(ctx);
     const evalScore =
@@ -532,11 +535,12 @@ function alphaBeta(
   }
 
   // Progressive widening at root: start with a smaller set of top moves and expand with depth.
-  if (ply === 0 && !ctx.rootFullWidth) {
+  if (ply === 0 && !ctx.rootFullWidth &&
+      getSingleStoneWinningSquares(ctx.board, opponent, 'ignoreKo').length === 0) {
     const base = underCriticalThreat ? 24 : 12;
     const perDepth = underCriticalThreat ? 6 : 4;
     const limit = Math.min(moves.length, base + perDepth * Math.max(0, depth - 1));
-    moves = moves.slice(0, limit);
+    moves = moves.filter((m, index) => index < limit || m.move.action === 'rift');
   }
 
   // NNUE-assisted ordering at root: rescore the top-K moves with a cheap child NNUE eval.

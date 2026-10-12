@@ -5,8 +5,10 @@ import { parseArgs } from 'node:util';
 import { resolve } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { getOpeningRootMoveFilter } from '../src/lib/game/ai/openingFilters.ts';
+import { isRiftAllowedAtMoveIndex } from '../src/lib/game/riftRules.ts';
 
 const { values } = parseArgs({ options: {
   reference: { type: 'string' }, games: { type: 'string', default: '16' },
@@ -14,6 +16,7 @@ const { values } = parseArgs({ options: {
   bundle: { type: 'boolean', default: false }, 'require-identical': { type: 'boolean', default: false },
   target: { type: 'string', default: '1' }, seed: { type: 'string', default: '101' },
   opening: { type: 'string', default: 'tactical' },
+  illegal: { type: 'string', default: 'forfeit' }, trace: { type: 'string' },
 } });
 assert.ok(values.reference, '--reference must point to an existing source checkout');
 const games = Number(values.games), time = Number(values.time), maxPlies = Number(values.plies);
@@ -21,7 +24,16 @@ const target = Number(values.target), startSeed = Number(values.seed);
 assert.ok(Number.isInteger(games) && games >= 0 && games % 2 === 0, 'games must be a nonnegative even integer');
 assert.ok(Number.isFinite(time) && time > 0 && Number.isInteger(maxPlies) && maxPlies > 0);
 assert.ok(Number.isInteger(target) && target > 0 && Number.isInteger(startSeed));
-assert.ok(['tactical', 'quiet'].includes(values.opening));
+assert.ok(['tactical', 'quiet', 'long-pro', 'long-pro-book', 'long-pro-full'].includes(values.opening));
+assert.ok(['forfeit', 'fallback'].includes(values.illegal));
+const longPro = values.opening.startsWith('long-pro');
+const openingPlies = values.opening === 'long-pro-full' ? 1 : values.opening === 'long-pro-book' ? 2 : longPro ? 3 : 6;
+function openingFilter(index) {
+  if (!longPro) return null;
+  const placement = getOpeningRootMoveFilter('long-pro', index, index % 2 + 1);
+  if (isRiftAllowedAtMoveIndex('long-pro', index)) return placement;
+  return move => move.action !== 'rift' && (!placement || placement(move));
+}
 const temporary = values.bundle ? await mkdtemp(resolve(tmpdir(), 'grr-compare-')) : null;
 let bundleIndex = 0;
 async function engine(root) {
@@ -49,11 +61,15 @@ function opening(seed) {
     return (seed >>> 0) % n;
   };
   let side = 1;
-  for (let ply = 0; ply < 6; ply++) {
-    if (values.opening === 'quiet') {
+  for (let ply = 0; ply < openingPlies; ply++) {
+    if (longPro && ply === 0) {
+      current.placeStone(b, 112, 1); side = 2; continue;
+    }
+    if (values.opening === 'quiet' || (values.opening === 'long-pro' && ply === 2)) {
       for (;;) {
         const a = (4 + random(7)) * 15 + 4 + random(7);
         const c = (4 + random(7)) * 15 + 4 + random(7);
+        if (values.opening === 'long-pro' && [a,c].some(p => Math.abs(Math.floor(p / 15) - 7) + Math.abs(p % 15 - 7) < 3)) continue;
         if (!current.validateReinforce(b, a, c, side)) continue;
         const move = { action: 'reinforce', pos1: a, pos2: c };
         const undo = current.makeMove(b, move, side);
@@ -64,7 +80,7 @@ function opening(seed) {
       continue;
     }
     // Keep openings fixed while the candidate changes during an experiment.
-    const moves = reference.generateAllMoves(b, side);
+    const moves = reference.generateAllMoves(b, side).filter(m => !longPro || m.move.action !== 'rift');
     const offset = random(Math.min(12, moves.length));
     for (let j = 0; j < moves.length; j++) {
       const move = moves[(offset + j) % moves.length].move;
@@ -102,6 +118,17 @@ console.log(JSON.stringify({ moveGeneration: {
   speedup: median(timings.reference) / median(timings.current),
 } }));
 const results = [];
+function legal(b, move, side, filter = null) {
+  if (!move) return false;
+  if (filter && !filter(move)) return false;
+  if (move.action === 'rift') return current.validateRift(b, move.pos, side);
+  if (move.pos2 !== null) return current.validateReinforce(b, move.pos1, move.pos2, side);
+  if (!current.isValidPlacement(b, move.pos1)) return false;
+  const undo = current.makeMove(b, move, side);
+  const wins = current.checkWinAt(b, move.pos1, side);
+  current.unmakeMove(b, undo, side);
+  return wins;
+}
 for (let game = 0; game < games; game++) {
   reset(current); reset(reference);
   const seed = startSeed + Math.floor(game / 2) * 97;
@@ -109,22 +136,42 @@ for (let game = 0; game < games; game++) {
   const currentColor = game % 2 + 1;
   const seen = new Map();
   const scores = { black: 0, white: 0 };
+  const history = [];
+  const initial = { cells: [...b.cells], ko: b.koPosition };
+  let repairedMoves = 0;
+  const repairedByEngine = { current: 0, reference: 0 };
   let winner = null, reason = 'ply-limit', ply = 0;
   for (; ply < maxPlies; ply++) {
-    const side = ply % 2 + 1;
+    const moveIndex = ply + openingPlies;
+    const side = moveIndex % 2 + 1;
+    const rootFilter = openingFilter(moveIndex);
     const key = `${b.hash}:${side}:${scores.black}:${scores.white}`;
     const count = (seen.get(key) ?? 0) + 1;
     seen.set(key, count);
     if (count >= 3) { reason = 'repetition'; break; }
     const e = side === currentColor ? current : reference;
     const before = current.cloneBoard(b);
-    const result = e.findBestMove(b, side, time, 10, null, null, null, null, scores, target);
+    const started = performance.now();
+    const result = e.findBestMove(b, side, time, 10, null, rootFilter,
+      openingFilter(moveIndex + 1), openingFilter(moveIndex + 2), scores, target);
+    const elapsedMs = performance.now() - started;
     assert.deepEqual(b, before, 'search must restore board state');
-    const move = result.move;
+    let move = result.move;
+    let repaired = false;
+    if (!legal(b, move, side, rootFilter) && values.illegal === 'fallback') {
+      // Match the application's legality guard rather than awarding a forfeit.
+      move = e.generateAllMoves(b, side, { scores, scoreToWin: target }).find(m => legal(b, m.move, side, rootFilter))?.move;
+      repairedMoves++;
+      repairedByEngine[side === currentColor ? 'current' : 'reference']++;
+      repaired = true;
+    }
     assert.ok(move, 'engine must return a move in these nonterminal positions');
+    if (rootFilter) assert.ok(rootFilter(move), 'opening constraints must be respected');
     if (move.action === 'rift') assert.equal(current.validateRift(b, move.pos, side), true);
     else if (move.pos2 !== null) assert.equal(current.validateReinforce(b, move.pos1, move.pos2, side), true);
     else assert.equal(current.isValidPlacement(b, move.pos1), true);
+    history.push({ moveIndex, side, engine: side === currentColor ? 'current' : 'reference', move, returnedMove: result.move, repaired,
+      score: result.score, depth: result.depth, nodes: result.nodes, elapsedMs, scores: {...scores} });
     current.makeMove(b, move, side);
     const scoring = current.applyScoringAndClear(b, move, side);
     if (move.action === 'reinforce' && move.pos2 === null && scoring.points === 0) {
@@ -140,12 +187,17 @@ for (let game = 0; game < games; game++) {
       }
     }
   }
-  results.push({ seed, currentColor, winner, reason, plies: ply, scores });
+  results.push({ seed, currentColor, winner, reason, plies: ply, scores, repairedMoves, repairedByEngine });
   console.log(JSON.stringify({ game: game + 1, ...results.at(-1) }));
+  if (values.trace) await writeFile(`${values.trace}-${game + 1}.json`, JSON.stringify({ ...results.at(-1), initial, history }));
 }
 console.log(JSON.stringify({ matchSummary: {
-  games, timeMs: time, maxPlies, target, bundled: values.bundle,
-  opening: `standard-empty, six ${values.opening} opening plies; colors swapped per seed`,
+  games, timeMs: time, maxPlies, target, startSeed, bundled: values.bundle,
+  opening: values.opening === 'long-pro-full' ? 'long-pro from forced center; both engines choose all subsequent moves; identical start per pair' :
+    values.opening === 'long-pro-book' ? 'long-pro with seeded White first pair; engines choose restricted Black second move; colors swapped per seed' :
+    values.opening === 'long-pro' ? 'long-pro, three seeded legal opening plies; colors swapped per seed' :
+    `standard-empty, six ${values.opening} opening plies; colors swapped per seed`,
+  illegalPolicy: values.illegal,
   currentWins: results.filter(r => r.winner === 'current').length,
   referenceWins: results.filter(r => r.winner === 'reference').length,
   draws: results.filter(r => r.winner === null).length,

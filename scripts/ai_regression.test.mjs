@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { boardFrom2D, cloneBoard, makeMove, unmakeMove, applyScoringAndClear, validateReinforce, placeStone, checkWinAt } from '../src/lib/game/ai/board.ts';
+import { boardFrom2D, cloneBoard, makeMove, unmakeMove, applyScoringAndClear, validateReinforce, placeStone, checkWinAt, getWinnerAfterMove } from '../src/lib/game/ai/board.ts';
 import { alphaBetaWindowed, iterativeDeepening, findBestMove, createSearchSession } from '../src/lib/game/ai/search.ts';
 import { TranspositionTable } from '../src/lib/game/ai/transposition.ts';
 import { NnueState } from '../src/lib/game/ai/nnue/evaluator.ts';
@@ -10,7 +10,7 @@ import { clearMoveOrdering } from '../src/lib/game/ai/moveOrder.ts';
 import { createReinforceScorer, evaluateReinforceMove } from '../src/lib/game/ai/synergy.ts';
 import { getBlockingMask, getSingleStoneWinningSquares } from '../src/lib/game/ai/threats.ts';
 import { evaluateSearch, evaluateHandcrafted } from '../src/lib/game/ai/evaluate.ts';
-import { generateAllMoves } from '../src/lib/game/ai/moveGen.ts';
+import { generateAllMoves, generateTacticalMoves, generateImmediateResponses } from '../src/lib/game/ai/moveGen.ts';
 
 function board(stones) {
   const grid = Array.from({ length: 15 }, () => Array(15).fill(null));
@@ -25,6 +25,95 @@ function weights() {
     hiddenBias: Int16Array.of(200), inputWeights: new Int8Array(450), outputWeights: Int8Array.of(1),
   };
 }
+
+function koDefensePosition() {
+  const b = board([]);
+  for (const p of [66,83,99,109,110,111,112,129,130,143,144,145]) placeStone(b, p, 1);
+  for (const p of [50,82,95,96,97,98,108,113,114,115,126,128]) placeStone(b, p, 2);
+  // Replay the actual preceding rift so both Ko and the position hash are correct.
+  placeStone(b, 94, 1);
+  makeMove(b, { action: 'rift', pos: 94 }, 2);
+  return b;
+}
+
+test('mandatory Ko defenses survive tactical and root candidate limits', () => {
+  const b = koDefensePosition();
+  const before = cloneBoard(b);
+  for (const generate of [generateAllMoves, generateTacticalMoves]) {
+    const moves = generate(b, 1);
+    assert.deepEqual(moves.map(m => m.move.pos).sort((a,b) => a-b), [95,96,97,98]);
+    assert.ok(moves.every(m => m.move.action === 'rift'));
+  }
+  const result = search(b);
+  assert.equal(result.completed, true);
+  assert.equal(result.move.action, 'rift');
+  assert.ok([95,96,97,98].includes(result.move.pos));
+  assert.ok(result.score > CONFIG.LOSS_SCORE + 100, JSON.stringify(result));
+  assert.deepEqual(b, before);
+});
+
+test('quiescence sees forcing attacks before an open three and gap three become fours', () => {
+  const b = board([[1,5,3],[1,5,4],[1,5,5],[1,9,3],[1,9,5],[1,9,6],[2,2,2]]);
+  const before = cloneBoard(b);
+  const result = search(b, {depth:0});
+  assert.equal(result.completed, true);
+  assert.ok(result.score >= CONFIG.WIN_SCORE - 3, JSON.stringify(result));
+  assert.deepEqual(b, before);
+});
+
+test('forced single-square blocks enumerate every legal second stone and safe rift', () => {
+  const b = board([[2,7,0],[2,7,1],[2,7,2],[2,7,3],[1,5,5],[1,9,9]]);
+  const before = cloneBoard(b);
+  const moves = generateImmediateResponses(b, 1);
+  const pairs = moves.filter(m => m.move.action === 'reinforce');
+  const expected = [];
+  for (let p = 0; p < 225; p++) if (validateReinforce(b, 109, p, 1)) expected.push(p);
+  assert.deepEqual(pairs.map(m => m.move.pos2).sort((a,b) => a-b), expected);
+  assert.ok(pairs.length > CONFIG.MAX_PAIRS);
+  for (const {move} of moves) {
+    const undo = makeMove(b, move, 1);
+    assert.equal(getSingleStoneWinningSquares(b, 2).length, 0);
+    unmakeMove(b, undo, 1);
+  }
+  assert.deepEqual(b, before);
+});
+
+test('immediate responses match exhaustive legal-move defenses, including intersecting fours and overlines', () => {
+  const fixtures = [
+    koDefensePosition(),
+    board([[2,7,0],[2,7,1],[2,7,2],[2,7,3],[1,5,5],[1,9,9]]),
+    board([[2,7,5],[2,7,6],[2,7,7],[2,7,8],[2,5,7],[2,6,7],[2,8,7],[1,2,2]]),
+    board([[2,5,3],[2,5,4],[2,5,5],[2,5,6],[2,9,3],[2,9,4],[2,9,5],[2,9,6],[1,7,7]]),
+    board([[2,7,0],[2,7,1],[2,7,2],[2,7,3],[2,4,1],[2,5,1],[2,6,1],[2,8,1],[2,9,1],[1,2,2]]),
+  ];
+  const key = m => m.action === 'rift' ? `r${m.pos}` : `p${Math.min(m.pos1,m.pos2)},${Math.max(m.pos1,m.pos2)}`;
+  for (const b of fixtures) {
+    const before = cloneBoard(b);
+    const expected = new Set();
+    const check = move => {
+      const undo = makeMove(b, move, 1);
+      const losesNow = getWinnerAfterMove(b, move, 1) === 2;
+      let losesNext = false;
+      // Brute-force the scoring reply instead of using the optimized scanner.
+      for (let p = 0; p < 225 && !losesNow && !losesNext; p++) {
+        if (b.cells[p] || b.koPosition === p) continue;
+        b.cells[p] = 2;
+        losesNext = checkWinAt(b, p, 2);
+        b.cells[p] = 0;
+      }
+      unmakeMove(b, undo, 1);
+      if (!losesNow && !losesNext) expected.add(key(move));
+    };
+    for (let a = 0; a < 225; a++) {
+      if (b.cells[a] === 2) check({action:'rift',pos:a});
+      for (let c = a + 1; c < 225; c++) {
+        if (validateReinforce(b, a, c, 1)) check({action:'reinforce',pos1:a,pos2:c});
+      }
+    }
+    assert.deepEqual(new Set(generateImmediateResponses(b, 1).map(m => key(m.move))), expected);
+    assert.deepEqual(b, before);
+  }
+});
 
 function search(b, { depth = 1, alpha = -CONFIG.INFINITY, beta = CONFIG.INFINITY,
   net = null, filter = null, tt = new TranspositionTable(4096), target = 1 } = {}) {
