@@ -1,5 +1,9 @@
 # Search throughput and isolated match validation
 
+These archived results predate the single-stone scoring fix. Both tested versions
+allowed illegal two-stone scoring reinforces. Their match results and timing
+comparisons do not establish performance or strength for the corrected rules.
+
 This round compares with `d50a97e7efca1ea313523af88e4c03160594d914`, the
 previous head of PR #2. Measurements use bundled Node v24.19.0 on 2026-10-13.
 The engine still uses handcrafted evaluation. Search depth limits, pruning,

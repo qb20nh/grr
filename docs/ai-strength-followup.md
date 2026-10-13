@@ -34,8 +34,10 @@ remains authoritative; repeated pondering slices retain the stronger completed
 child from earlier slices of the same position.
 
 Two findings on the merged PR were reproduced and fixed during this follow-up.
-Multi-point search now recognizes wins from intersecting exact-five lines and
-compatible scoring pairs, including at the quiescence horizon. Mandatory defense
+Multi-point search recognized wins from intersecting exact-five lines and
+scoring pairs, including at the quiescence horizon. The scoring-pair behavior was
+incorrect and was removed in the later single-stone scoring fix; the measurements
+in this document predate that correction. Mandatory defense
 generation checks the actual points needed and all opposing winning placements.
 Rift defenses account for points and stone clearing caused by the capture. When
 the defender has a nonterminal scoring counterplay, ordinary match search still

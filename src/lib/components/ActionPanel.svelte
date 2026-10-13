@@ -194,7 +194,7 @@
         <span class="mode-label">Rift</span>
       {:else if currentMode === 'reinforce'}
         <span class="mode-icon reinforce">⬡</span>
-        <span class="mode-label">{$pendingPlacements.length}/2</span>
+        <span class="mode-label">{$pendingPlacements.length}/{showConfirm && $pendingPlacements.length === 1 ? 1 : 2}</span>
       {:else}
         <span class="mode-icon idle">·</span>
         <span class="mode-label muted">{idleText}</span>

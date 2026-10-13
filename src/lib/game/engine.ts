@@ -1,7 +1,7 @@
 import type { Position, GameState, PlayerColor } from './types';
 import { CENTER_POS, positionsEqual, getOpponent } from './types';
 import { gameStore } from '$lib/stores/gameStore';
-import { validateReinforceAction, validateRiftAction, isValidPlacement, checkColinearityConstraint, wouldScoreWithSingleStone, hasAnyLegalReinforceMove } from './validator';
+import { validateReinforceAction, validateRiftAction, isValidPlacement, wouldScoreWithSingleStone, hasAnyLegalReinforceMove } from './validator';
 import { getScoringLinesAfterRift, getScoringLinesForPlacements } from './winChecker';
 import { LONG_PRO_RIFT_FORBIDDEN_FIRST_TURNS, isRiftAllowedForState } from './riftRules';
 import {
@@ -217,11 +217,10 @@ export function createGameEngine(): GameEngine {
       return;
     }
 
-    // If we have one pending, check colinearity with this new position
+    // A scoring placement must stand alone; otherwise validate the full pair.
     if (state.pendingPlacements.length === 1) {
       const firstPos = state.pendingPlacements[0];
-      if (!checkColinearityConstraint(state.board, firstPos, pos, state.currentPlayer)) {
-        // Invalid due to colinearity - don't add
+      if (!validateReinforceConsideringOpening(state, [firstPos, pos]).valid) {
         return;
       }
     }
@@ -394,9 +393,10 @@ export function createGameEngine(): GameEngine {
       return false;
     }
 
-    // If we have a pending placement, check colinearity
+    // Keep the selected stone clickable for deselection, then validate a pair.
     if (state.pendingPlacements.length === 1) {
-      return checkColinearityConstraint(state.board, state.pendingPlacements[0], pos, state.currentPlayer);
+      const firstPos = state.pendingPlacements[0];
+      return positionsEqual(firstPos, pos) || validateReinforceConsideringOpening(state, [firstPos, pos]).valid;
     }
 
     return true;

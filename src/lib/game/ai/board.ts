@@ -167,7 +167,10 @@ export function validateReinforce(
   if (!isValidPlacement(board, pos1)) return false;
   if (!isValidPlacement(board, pos2)) return false;
   if (pos1 === pos2) return false;
-  return checkColinearityConstraint(board, pos1, pos2, player);
+  if (!checkColinearityConstraint(board, pos1, pos2, player)) return false;
+  // A scoring reinforce places only one stone. Legal pairs cannot extend each
+  // other's scoring line because collinear placements need an opposing shield.
+  return !checkWinAt(board, pos1, player) && !checkWinAt(board, pos2, player);
 }
 
 /**
