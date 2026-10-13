@@ -256,10 +256,14 @@ export function orderMoves(
   depth: number,
   ttBestMove: Move | null,
   prevMove: Move | null = null,
-  match?: MatchContext
+  match?: MatchContext,
+  candidates?: readonly ScoredMove[]
 ): ScoredMove[] {
-  // Generate all candidate moves with their base scores
-  const moves = generateAllMoves(board, player, match);
+  // Root candidates can outlive one iteration. Keep their base order and scores
+  // intact while refreshing TT, killer and history bonuses for this search.
+  const moves = candidates
+    ? candidates.map(m => ({ ...m }))
+    : generateAllMoves(board, player, match);
 
   const ttCode = ttBestMove ? encodeMove(ttBestMove) : MOVE_CODE_NONE;
   const prevCode = prevMove ? encodeMove(prevMove) : MOVE_CODE_NONE;

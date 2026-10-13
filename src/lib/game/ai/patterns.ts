@@ -6,7 +6,6 @@
 import { BOARD_SIZE, BOARD_CELLS, DIRECTIONS } from './constants';
 import type { Board, CellIndex, Color, PatternType, PatternCounts } from './types';
 import { EMPTY } from './types';
-import { toIndex, inBounds } from './utils';
 
 /**
  * Line information from scanning in one direction
@@ -357,11 +356,6 @@ export function countPatterns(board: Board, player: Color): PatternCounts {
       const pattern = classifyLine(info);
       if (pattern === null) continue;
       
-      // Generate key based on line extent
-      const [dRow, dCol] = DIRECTIONS[dir];
-      const row = Math.floor(pos / BOARD_SIZE);
-      const col = pos % BOARD_SIZE;
-
       // Gap lines (e.g., XX_XX) are split into two segments, so use the gap cell as the key.
       // This prevents double-counting from each side of the gap.
       let lineKey: number;
@@ -373,17 +367,8 @@ export function countPatterns(board: Board, player: Color): PatternCounts {
         // Gap-key namespace starts after contiguous line keys.
         lineKey = BOARD_CELLS * 4 + info.gapPos * 4 + dir;
       } else {
-        // Find start of contiguous line
-        let startR = row, startC = col;
-        while (
-          inBounds(startR - dRow, startC - dCol) &&
-          board.cells[toIndex(startR - dRow, startC - dCol)] === player
-        ) {
-          startR -= dRow;
-          startC -= dCol;
-        }
-        const startIdx = toIndex(startR, startC);
-        lineKey = startIdx * 4 + dir;
+        // The loop already excludes every stone after the run's start.
+        lineKey = pos * 4 + dir;
       }
       if (COUNTED_LINES[lineKey] === stamp) continue;
       COUNTED_LINES[lineKey] = stamp;

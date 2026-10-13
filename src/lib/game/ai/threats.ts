@@ -42,6 +42,8 @@ export function getBlockingMask(board: Board, player: Color, ignoreKo: boolean =
     if (board.cells[pos] !== opponent) continue;
 
     for (let dir = 0; dir < 4; dir++) {
+      // Every stone in a contiguous run has the same gap and extend squares.
+      if (BACKWARD_STEPS[pos * 4 + dir] > 0 && board.cells[pos - LINE_OFFSETS[dir]] === opponent) continue;
       const info = scanLine(board, pos, dir, opponent, ignoreKo);
       const pattern = classifyLine(info);
 
@@ -275,6 +277,7 @@ export function getSingleStoneWinningSquares(
   const cells = board.cells;
 
   const addEnd = (idx: number, offset: number, remaining: number, count: number): void => {
+    if (count + remaining < 4) return;
     if (cells[idx] !== EMPTY || ko === idx) return;
     if (WIN_MASK[idx] === stamp) return;
     let next = idx + offset;
@@ -292,25 +295,30 @@ export function getSingleStoneWinningSquares(
     if (cells[pos] !== player) continue;
     for (let dir = 0; dir < 4; dir++) {
       const geometry = pos * 4 + dir;
-      let backward = BACKWARD_STEPS[geometry];
-      let forward = FORWARD_STEPS[geometry];
+      const backward = BACKWARD_STEPS[geometry];
+      const forward = FORWARD_STEPS[geometry];
       const offset = LINE_OFFSETS[dir];
-      let start = pos;
-      if (!through && backward > 0 && cells[start - offset] === player) continue;
-      while (through && backward > 0 && cells[start - offset] === player) {
-        start -= offset;
-        backward--;
-        forward++;
+      let left = 0;
+      if (!through && backward > 0 && cells[pos - offset] === player) continue;
+      // A local query starts inside a run. Count each side once instead of
+      // finding its start and then scanning the left half a second time.
+      while (through && left < backward && left < 4 && cells[pos - (left + 1) * offset] === player) {
+        left++;
       }
 
-      let count = 1, end = start + offset;
-      while (count <= forward && cells[end] === player && count < 5) {
-        count++;
-        end += offset;
+      let right = 0;
+      while (right < forward && left + right < 4 && cells[pos + (right + 1) * offset] === player) {
+        right++;
       }
+      const count = left + 1 + right;
       if (count >= 5) continue;
-      if (backward > 0) addEnd(start - offset, -offset, backward - 1, count);
-      if (count <= forward) addEnd(end, offset, forward - count, count);
+      // With ascending full-board origins and positive direction offsets, any
+      // backward gap win has already been found at the earlier run's forward
+      // end. Only a contiguous four can add a new backward winning square.
+      if (left < backward && (through || count === 4)) {
+        addEnd(pos - (left + 1) * offset, -offset, backward - left - 1, count);
+      }
+      if (right < forward) addEnd(pos + (right + 1) * offset, offset, forward - right - 1, count);
     }
   }
 
@@ -425,8 +433,7 @@ export function riftBreaksThreat(
   
   for (let dir = 0; dir < 4; dir++) {
     // Ko is only temporary; threats that are Ko-blocked right now may be real next turn.
-    const info = scanLine(board, riftPos, dir, opponent, true);
-    const pattern = classifyLine(info);
+    const pattern = patternAt(board, riftPos, dir, opponent, true);
     
     if (pattern === 'FIVE' ||
         pattern === 'OPEN_FOUR' ||
@@ -456,8 +463,7 @@ export function evaluateRiftTarget(
   for (let dir = 0; dir < 4; dir++) {
     // Ko is only temporary; evaluate the threats this stone contributes to assuming
     // Ko will not block the opponent on their next move.
-    const info = scanLine(board, riftPos, dir, opponent, true);
-    const pattern = classifyLine(info);
+    const pattern = patternAt(board, riftPos, dir, opponent, true);
     
     // Score based on what pattern we're breaking
     switch (pattern) {

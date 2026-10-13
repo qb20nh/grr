@@ -38,6 +38,8 @@ interface SearchContext {
   // Only canonical search positions enter this cache, never hypothetical helper mutations.
   evalCache: Map<bigint, number>;
   quiescenceCache: Map<bigint, QuiescenceEntry>;
+  /** Base root candidates, before dynamic ordering, filtering and widening. */
+  rootCandidates: ScoredMove[] | null;
   /** Expand the generated root set after a selective search reports a loss. */
   rootFullWidth: boolean;
   /**
@@ -49,6 +51,8 @@ interface SearchContext {
    * Score target (0 = unlimited / play until exhaustion).
    */
   scoreToWin: number;
+  /** The score component of position keys changes only when a move scores. */
+  scoreHash: bigint;
   /**
    * Optional root ordering hint (e.g. from TSS defense refutation). This should
    * NOT short-circuit search; it only influences move ordering at ply 0.
@@ -74,6 +78,7 @@ type SearchUndoInfo = UndoInfo & {
   scoredBy: Color | null;
   scoreDelta: number;
   cleared: CellIndex[] | null;
+  previousScoreHash: bigint;
 };
 
 function restoreClearedStones(board: Board, cleared: CellIndex[], color: Color): void {
@@ -214,16 +219,25 @@ function getRootMoves(
   board: Board,
   player: Color,
   rootMoveFilter: ((m: Move) => boolean) | null,
-  match?: { scores: { black: number; white: number }; scoreToWin: number }
+  match?: { scores: { black: number; white: number }; scoreToWin: number },
+  candidates?: ScoredMove[]
 ): ScoredMove[] {
-  const moves = filterRootMoves(generateAllMoves(board, player, match), rootMoveFilter);
+  const moves = filterRootMoves(candidates ?? generateAllMoves(board, player, match), rootMoveFilter);
   if (moves.length > 0) return moves;
   if (!rootMoveFilter) return moves;
   return generateFallbackRootMoves(board, player, rootMoveFilter);
 }
 
+function getRootCandidates(ctx: SearchContext, player: Color): ScoredMove[] {
+  return ctx.rootCandidates ??= generateAllMoves(ctx.board, player, {
+    scores: { black: ctx.scoreBlack, white: ctx.scoreWhite },
+    scoreToWin: ctx.scoreToWin,
+  });
+}
+
 function applyMove(ctx: SearchContext, move: Move, player: Color): SearchUndoInfo {
   const undo = makeMove(ctx.board, move, player) as SearchUndoInfo;
+  undo.previousScoreHash = ctx.scoreHash;
   ctx.nnue?.applyMove(move, player, undo);
 
   const scoring = applyScoringAndClear(ctx.board, move, player);
@@ -235,6 +249,7 @@ function applyMove(ctx: SearchContext, move: Move, player: Color): SearchUndoInf
     if (scoring.cleared) ctx.nnue?.removeStones(scoring.cleared, scoring.scoredBy);
     if (scoring.scoredBy === BLACK) ctx.scoreBlack += scoring.points;
     else if (scoring.scoredBy === WHITE) ctx.scoreWhite += scoring.points;
+    ctx.scoreHash = matchScoreHash(ctx.scoreBlack, ctx.scoreWhite, ctx.scoreToWin);
   }
 
   return undo;
@@ -251,6 +266,7 @@ function revertMove(ctx: SearchContext, undo: SearchUndoInfo, player: Color): vo
     }
   }
 
+  ctx.scoreHash = undo.previousScoreHash;
   ctx.nnue?.unapplyMove(undo.move, player, undo);
   unmakeMove(ctx.board, undo, player);
 }
@@ -319,7 +335,7 @@ function quiescence(
     return 0;
   }
 
-  const key = withTurn(ctx.board.hash, player) ^ matchScoreHash(ctx.scoreBlack, ctx.scoreWhite, ctx.scoreToWin);
+  const key = withTurn(ctx.board.hash, player) ^ ctx.scoreHash;
   const cached = ctx.quiescenceCache.get(key);
   // A different tactical horizon is a different value. Never publish these
   // selective continuations as a completed main-search depth in the shared TT.
@@ -438,7 +454,7 @@ function alphaBeta(
   // Transposition table probe
   const baseKey =
     withTurn(ctx.board.hash, player) ^
-    matchScoreHash(ctx.scoreBlack, ctx.scoreWhite, ctx.scoreToWin);
+    ctx.scoreHash;
   // A narrowed root does not establish the value of the full candidate set.
   // Keep its bounds separate from interior and fully widened searches.
   const ttKey = ply === 0 && !ctx.rootFullWidth ? baseKey ^ SELECTIVE_ROOT_KEY : baseKey;
@@ -552,7 +568,7 @@ function alphaBeta(
   let moves = orderMoves(ctx.board, player, ply, orderingHint, prevMove, {
     scores: { black: ctx.scoreBlack, white: ctx.scoreWhite },
     scoreToWin: ctx.scoreToWin,
-  });
+  }, ply === 0 ? getRootCandidates(ctx, player) : undefined);
 
   // Root-only move filtering (e.g. opening constraints).
   if (ply === 0 && ctx.rootMoveFilter) {
@@ -776,10 +792,12 @@ export function alphaBetaWindowed(
     nnue,
     evalCache: new Map(),
     quiescenceCache: new Map(),
+    rootCandidates: null,
     rootFullWidth: false,
     scoreBlack: scores.black,
     scoreWhite: scores.white,
     scoreToWin,
+    scoreHash: matchScoreHash(scores.black, scores.white, scoreToWin),
     rootMoveHint: null,
     rootMoveFilter,
     ply1MoveFilter,
@@ -890,10 +908,12 @@ export function iterativeDeepening(
     nnue,
     evalCache: new Map(),
     quiescenceCache: new Map(),
+    rootCandidates: null,
     rootFullWidth: false,
     scoreBlack: options?.scores?.black ?? 0,
     scoreWhite: options?.scores?.white ?? 0,
     scoreToWin: options?.scoreToWin ?? 1,
+    scoreHash: matchScoreHash(options?.scores?.black ?? 0, options?.scores?.white ?? 0, options?.scoreToWin ?? 1),
     rootMoveHint: options?.rootMoveHint ?? null,
     rootMoveFilter,
     ply1MoveFilter,
@@ -905,7 +925,7 @@ export function iterativeDeepening(
   const allMoves = getRootMoves(board, player, ctx.rootMoveFilter, {
     scores: { black: ctx.scoreBlack, white: ctx.scoreWhite },
     scoreToWin: ctx.scoreToWin,
-  });
+  }, getRootCandidates(ctx, player));
   let bestMoveSoFar: Move | null = allMoves.length > 0 ? allMoves[0].move : null;
   // Move-ordering bonuses can exceed mate scores and are not position values.
   let bestScoreSoFar = evaluateWithMatch(ctx, player);
@@ -1064,6 +1084,7 @@ class SearchSessionImpl implements SearchSession {
   private nnue: NnueState | null = null;
   private evalCache = new Map<bigint, number>();
   private quiescenceCache = new Map<bigint, QuiescenceEntry>();
+  private rootCandidates: ScoredMove[] = [];
   private rootFullWidth = false;
   private scoreBlack: number;
   private scoreWhite: number;
@@ -1117,10 +1138,14 @@ class SearchSessionImpl implements SearchSession {
     this.nnue = this.nnueWeights ? NnueState.fromBoard(this.board, this.nnueWeights) : null;
 
     // Seed "best move so far" to guarantee non-null result.
-    const moves = getRootMoves(this.board, this.player, this.rootMoveFilter, {
+    this.rootCandidates = generateAllMoves(this.board, this.player, {
       scores: { black: this.scoreBlack, white: this.scoreWhite },
       scoreToWin: this.scoreToWin,
     });
+    const moves = getRootMoves(this.board, this.player, this.rootMoveFilter, {
+      scores: { black: this.scoreBlack, white: this.scoreWhite },
+      scoreToWin: this.scoreToWin,
+    }, this.rootCandidates);
     this.bestMove = moves.length > 0 ? moves[0].move : null;
     this.bestScore = evaluateSearch(this.board, this.player, this.nnue);
     this.bestScore = clampStaticScore(this.bestScore +
@@ -1194,10 +1219,12 @@ class SearchSessionImpl implements SearchSession {
       nnue: this.nnue,
       evalCache: this.evalCache,
       quiescenceCache: this.quiescenceCache,
+      rootCandidates: this.rootCandidates,
       rootFullWidth: this.rootFullWidth,
       scoreBlack: this.scoreBlack,
       scoreWhite: this.scoreWhite,
       scoreToWin: this.scoreToWin,
+      scoreHash: matchScoreHash(this.scoreBlack, this.scoreWhite, this.scoreToWin),
       rootMoveHint: null,
       rootMoveFilter: this.rootMoveFilter,
       ply1MoveFilter: this.ply1MoveFilter,
@@ -1361,10 +1388,12 @@ export function findBestMove(
     nnue: null, // NNUE disabled (handcrafted eval only)
     evalCache: new Map(),
     quiescenceCache: new Map(),
+    rootCandidates: null,
     rootFullWidth: false,
     scoreBlack: scores.black,
     scoreWhite: scores.white,
     scoreToWin,
+    scoreHash: matchScoreHash(scores.black, scores.white, scoreToWin),
     rootMoveHint: null,
     rootMoveFilter: null,
     ply1MoveFilter: null,

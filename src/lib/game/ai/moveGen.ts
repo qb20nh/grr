@@ -18,6 +18,20 @@ export interface MatchContext {
   scoreToWin: number;
 }
 
+interface WinningSquares {
+  player: CellIndex[];
+  opponent: CellIndex[];
+}
+
+// Share only the unchanged parent position's scans during one generation call.
+// Child probes mutate cells directly, so they must keep using fresh scans.
+function parentWinningSquares(board: Board, player: Color): WinningSquares {
+  return {
+    player: findWinningPositions(board, player),
+    opponent: findWinningPositionsAssumingKoClears(board, getOpponent(player)),
+  };
+}
+
 /**
  * Complete replies to an immediate match-ending threat. A heuristic top-K list
  * is unsafe here: attractive attacks can crowd out every legal defensive rift.
@@ -25,13 +39,17 @@ export interface MatchContext {
  * `firstOnly` answers existence at a tactical horizon without scoring all replies.
  */
 export function generateImmediateResponses(board: Board, player: Color, match?: MatchContext, firstOnly = false): ScoredMove[] | null {
+  return immediateResponses(board, player, match, firstOnly);
+}
+
+function immediateResponses(board: Board, player: Color, match: MatchContext | undefined, firstOnly: boolean, winning?: WinningSquares): ScoredMove[] | null {
   const target = match?.scoreToWin ?? 1;
   if (target === 0) return null;
-  if (target > 1) return generateMultiPointResponses(board, player, match!, firstOnly);
+  if (target > 1) return generateMultiPointResponses(board, player, match!, firstOnly, winning);
   const ownScore = player === BLACK ? match?.scores.black ?? 0 : match?.scores.white ?? 0;
   const opponent = getOpponent(player);
   const opponentScore = opponent === BLACK ? match?.scores.black ?? 0 : match?.scores.white ?? 0;
-  const wins = findWinningPositions(board, player);
+  const wins = winning?.player ?? findWinningPositions(board, player);
   if (wins.length > 0) {
     if (ownScore + 1 >= target) {
       return [{ move: createSingleWinMove(wins[0]), score: CONFIG.INFINITY, orderScore: CONFIG.INFINITY }];
@@ -40,7 +58,7 @@ export function generateImmediateResponses(board: Board, player: Color, match?: 
     return null;
   }
   if (opponentScore + 1 < target) return null;
-  const threats = findWinningPositionsAssumingKoClears(board, opponent);
+  const threats = winning?.opponent ?? findWinningPositionsAssumingKoClears(board, opponent);
   if (threats.length === 0) return null;
 
   const responses: ScoredMove[] = [];
@@ -79,7 +97,7 @@ export function generateImmediateResponses(board: Board, player: Color, match?: 
   return responses;
 }
 
-function generateMultiPointResponses(board: Board, player: Color, match: MatchContext, firstOnly: boolean): ScoredMove[] | null {
+function generateMultiPointResponses(board: Board, player: Color, match: MatchContext, firstOnly: boolean, winning?: WinningSquares): ScoredMove[] | null {
   const ownScore = player === BLACK ? match.scores.black : match.scores.white;
   const opponent = getOpponent(player);
   const opponentScore = opponent === BLACK ? match.scores.black : match.scores.white;
@@ -87,7 +105,7 @@ function generateMultiPointResponses(board: Board, player: Color, match: MatchCo
   if (win) return [{move:win, score:CONFIG.INFINITY, orderScore:CONFIG.INFINITY}];
   // Taking nonterminal points clears friendly shields and can change pair legality.
   // Keep the ordinary match search when such counter-scoring moves are possible.
-  if (findWinningPositions(board, player).length > 0) return null;
+  if ((winning?.player ?? findWinningPositions(board, player)).length > 0) return null;
   const threat = getImmediateMatchWinningMove(board, opponent, match.scoreToWin - opponentScore, 'ignoreKo');
   if (!threat) return null;
 
@@ -249,6 +267,15 @@ export function generateReinforceMoves(
   player: Color,
   match?: MatchContext
 ): ScoredMove[] {
+  return generateReinforceMovesWithWins(board, player, match);
+}
+
+function generateReinforceMovesWithWins(
+  board: Board,
+  player: Color,
+  match?: MatchContext,
+  winning?: WinningSquares
+): ScoredMove[] {
   const opponent = getOpponent(player);
   const scores = match?.scores ?? { black: 0, white: 0 };
   const scoreToWin = match?.scoreToWin ?? 1;
@@ -258,7 +285,7 @@ export function generateReinforceMoves(
   const opponentOnMatchPoint = scoreToWin !== 0 && opponentScore + 1 >= scoreToWin;
 
   // A match-ending single needs no candidate scoring or pair enumeration.
-  const scoringPositions = findWinningPositions(board, player);
+  const scoringPositions = winning?.player ?? findWinningPositions(board, player);
   if (playerOnMatchPoint && scoringPositions.length > 0) {
     return [{ move: createSingleWinMove(scoringPositions[0]), score: CONFIG.INFINITY, orderScore: CONFIG.INFINITY }];
   }
@@ -304,7 +331,7 @@ export function generateReinforceMoves(
   // CRITICAL: Check if opponent can end the match on their next move (match point).
   // Ko only blocks placement until the next move. Since we are about to move now,
   // treat Ko as available when asking “can the opponent win on their next move?”.
-  const opponentWinPositions = findWinningPositionsAssumingKoClears(board, opponent);
+  const opponentWinPositions = winning?.opponent ?? findWinningPositionsAssumingKoClears(board, opponent);
   const mustBlock = opponentOnMatchPoint && opponentWinPositions.length > 0;
   
   // If opponent can win next turn, blocking is MANDATORY
@@ -420,6 +447,15 @@ export function generateRiftMoves(
   player: Color,
   match?: MatchContext
 ): ScoredMove[] {
+  return generateRiftMovesWithWins(board, player, match);
+}
+
+function generateRiftMovesWithWins(
+  board: Board,
+  player: Color,
+  match?: MatchContext,
+  winning?: WinningSquares
+): ScoredMove[] {
   const opponent = getOpponent(player);
   const scores = match?.scores ?? { black: 0, white: 0 };
   const scoreToWin = match?.scoreToWin ?? 1;
@@ -428,7 +464,7 @@ export function generateRiftMoves(
   const moves: ScoredMove[] = [];
   
   // If the opponent is on match point, rifting the right stone can be critical defense.
-  const opponentWinPositions = findWinningPositionsAssumingKoClears(board, opponent);
+  const opponentWinPositions = winning?.opponent ?? findWinningPositionsAssumingKoClears(board, opponent);
   const opponentCanWin = opponentOnMatchPoint && opponentWinPositions.length > 0;
   
   // Find all opponent stones
@@ -471,10 +507,11 @@ export function generateAllMoves(
   player: Color,
   match?: MatchContext
 ): ScoredMove[] {
-  const responses = generateImmediateResponses(board, player, match);
+  const winning = parentWinningSquares(board, player);
+  const responses = immediateResponses(board, player, match, false, winning);
   if (responses && responses.length > 0) return responses;
-  const reinforceMoves = generateReinforceMoves(board, player, match);
-  const riftMoves = generateRiftMoves(board, player, match);
+  const reinforceMoves = generateReinforceMovesWithWins(board, player, match, winning);
+  const riftMoves = generateRiftMovesWithWins(board, player, match, winning);
 
   // Merge two already-sorted lists (avoid an extra O(n log n) sort in the hot path).
   const out: ScoredMove[] = new Array(reinforceMoves.length + riftMoves.length);
@@ -508,12 +545,13 @@ export function generateTacticalMoves(
   player: Color,
   match?: MatchContext
 ): ScoredMove[] {
-  const responses = generateImmediateResponses(board, player, match);
+  const winning = parentWinningSquares(board, player);
+  const responses = immediateResponses(board, player, match, false, winning);
   if (responses !== null) return responses;
   const opponent = getOpponent(player);
-  const defending = findWinningPositionsAssumingKoClears(board, opponent).length > 0;
-  const previousWins = findWinningPositionsAssumingKoClears(board, player);
-  const candidates = [...generateReinforceMoves(board, player, match), ...generateRiftMoves(board, player, match)];
+  const defending = winning.opponent.length > 0;
+  const previousWins = board.koPosition === null ? winning.player : findWinningPositionsAssumingKoClears(board, player);
+  const candidates = [...generateReinforceMovesWithWins(board, player, match, winning), ...generateRiftMovesWithWins(board, player, match, winning)];
   const tactical: ScoredMove[] = [];
   for (const candidate of candidates) {
     const undo = makeMove(board, candidate.move, player);
