@@ -529,13 +529,13 @@ function isLossScore(score: number): boolean {
   return score <= CONFIG.LOSS_SCORE + MATE_SCORE_MARGIN;
 }
 
-function toTTScore(nodeScore: number, ply: number): number {
+export function toTTScore(nodeScore: number, ply: number): number {
   if (isWinScore(nodeScore)) return nodeScore + ply;
   if (isLossScore(nodeScore)) return nodeScore - ply;
   return nodeScore;
 }
 
-function fromTTScore(storedScore: number, ply: number): number {
+export function fromTTScore(storedScore: number, ply: number): number {
   if (isWinScore(storedScore)) return storedScore - ply;
   if (isLossScore(storedScore)) return storedScore + ply;
   return storedScore;

@@ -297,6 +297,8 @@ This section lists the main performance-oriented techniques that are implemented
 - **Search efficiency (ordering + pruning + stable time control)**
   - Alpha-beta uses PVS, aspiration windows, and quiescence with forcing attacks and immediate defenses (`generateTacticalMoves`). Attack pairs are capped after checking that they create a real scoring threat; generated forcing rifts and mandatory defenses survive the cap. Ordering bonuses are not used as delta-pruning bounds.
   - Forced-defense quiescence nodes skip the unused stand-pat evaluation; horizon values and nonterminal scoring fallbacks still evaluate normally.
+  - One-point play caps the tactical frontier at two forcing plies, reserving time for broader main-search replies alongside TSS. Multi-point and unlimited play retain the four-ply ceiling because they skip TSS. At the boundary, match-winning placements and the absence of any legal immediate defense still receive terminal scores. The existence check stops at its first valid defense without scoring every filler.
+  - A separate per-position quiescence cache holds at most 16,384 bounds, keyed by board, Ko, turn and match scores. Reuse requires the same remaining tactical depth; mate distances are normalized. These values never enter the main depth table.
   - Multi-point wins count all exact-five lines, including intersecting lines and compatible scoring pairs. Immediate multi-point defenses inspect actual remaining points and scoring clears rather than assuming every move gains exactly one point.
   - Pruning/reduction suite includes (with conservative guardrails): razoring, null-move pruning (disabled under tactical danger), late-move pruning, late-move reductions, futility pruning: `src/lib/game/ai/search.ts`.
   - Ordering combines TT best-move, killer moves, history, countermove, and continuation history; all backed by typed arrays to avoid per-node allocations: `src/lib/game/ai/moveOrder.ts`.
@@ -306,6 +308,7 @@ This section lists the main performance-oriented techniques that are implemented
   - Search depth decreases on every move, with bounded quiescence at the frontier. Repeated tactical moves cannot keep the nominal depth fixed indefinitely.
   - PVS keeps the established best move on equal returned scores, since a null-window fail-low bound does not establish a genuine tie. Quiescence cannot stand pat against an immediate scoring threat. It checks legal match-winning singles even at its depth boundary and examines forcing attacks before declaring a position quiet.
   - Futility pruning compares the parent position evaluation with alpha and is limited to quiet non-PV nodes. Ordering bonuses cannot prune root alternatives. A selective loss no longer stops iterative deepening early.
+  - A selective root loss immediately retries all generated candidates at the same depth. Narrowed root bounds use a separate TT key so they cannot cut off that wider retry or an interior search.
   - Unsearched fallbacks use bounded position values. If root safety replaces a move, its score and depth are recalculated instead of retaining the discarded principal variation's metadata.
   - Before the first iteration completes, a timeout preserves the best fully searched root child. The aborted child is excluded and completed depth remains zero. Completed iterations remain authoritative; repeated slices do not discard a stronger previously searched child from the same position.
 
@@ -314,6 +317,7 @@ This section lists the main performance-oriented techniques that are implemented
   - Nonterminal heuristic scores, including match-point adjustments, are bounded below the mate-score range. Large fork penalties cannot be mistaken for a proven loss or trigger a false resignation.
   - Hypothetical fork placements are alternative plans. Their bonus uses at most two compatible fork-producing squares instead of summing every alternative; existing board patterns are scored separately.
   - Line scanning uses precomputed board geometry and scans each contiguous run once when counting patterns. A gap variant joins exactly two adjacent runs; it cannot combine two separate gaps into a phantom threat.
+  - Callers needing only a pattern category use `patternAt`, avoiding `LineInfo` allocation. Coordinate-dependent callers retain the full scanner; both paths share the category ranking.
   - A search-local cache holds up to 16,384 handcrafted values keyed by board, ko and player. Match points are applied separately. Helper functions that temporarily mutate cells never access this cache. Ponder sessions retain it only for their current position.
   - Move generation and fork detection share precomputed candidate neighborhoods. Match-ending single-stone moves bypass pair scoring.
 
@@ -322,6 +326,7 @@ This section lists the main performance-oriented techniques that are implemented
   - TSS uses compact move encoding in memo entries (`encodeMove`/`decodeMove`) to keep caches small: `src/lib/game/ai/tss.ts`, `src/lib/game/ai/moveCodec.ts`.
   - TSS receives at most 30% of the remaining timed budget, capped at 2.5 seconds. Defensive hints do not bypass the remaining full search. TSS is skipped when opening filters are pending because it does not model them.
   - The attacker quota is applied after testing whether each generated move creates a forcing threat; nonforcing moves cannot consume that quota.
+  - Defender replies reuse the complete immediate-evasion generator. Live one-point searches allow up to 225 replies, covering every legal filler and safe rift; an incomplete or timed-out defense search cannot prove a win. Cache keys retain the full limit values.
 
 - **NNUE incremental evaluation (fast leaf eval + ordering assistance)**
   - Incremental accumulator (`NnueState`) supports O(hiddenDim) updates per move and avoids re-evaluating from scratch: `src/lib/game/ai/nnue/evaluator.ts`.

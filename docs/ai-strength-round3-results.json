@@ -1,0 +1,4161 @@
+{
+  "measuredDateUtc": "2026-10-12",
+  "node": "v24.19.0",
+  "baseCommit": "01e8a226317dbac8d69ec1331de9e9cbb4b167ab",
+  "finalCandidateSourceBlobHashes": {
+    "scripts/compare_ai.mjs": "db7bbc54958af9e22a83c88d1c5a4c0efc3741bb",
+    "src/lib/game/ai.worker.ts": "1fcc1b3460fdec721fded5d08674f6f31195296c",
+    "src/lib/game/ai/benchmark.ts": "3fd1480f7b65c2f14f7ce1240291023653f9d12c",
+    "src/lib/game/ai/board.ts": "a3047daa985e2b86ff63c8ac0a7d021c2909b740",
+    "src/lib/game/ai/constants.ts": "ced94d15777004741dd3ea152828a30a46911a1f",
+    "src/lib/game/ai/dihedral.ts": "7b45cff307586586bf3d7f65d6cf0a8b73572e39",
+    "src/lib/game/ai/evaluate.ts": "dc6bd8a0c4d4fde43e157f569c3d58a92a4a7838",
+    "src/lib/game/ai/index.ts": "6af59cd88c35095bb3a5bcaecf88c19f519b4358",
+    "src/lib/game/ai/moveCodec.ts": "6df4bf13137020d647bc828c6246628a1a95bc82",
+    "src/lib/game/ai/moveGen.ts": "1e9e9beecca3c0827ec1c8c7102f33f54128156b",
+    "src/lib/game/ai/moveOrder.ts": "d375b72fab38d09a62825b8afbb0e62e47588634",
+    "src/lib/game/ai/nnue/evaluator.ts": "91450a383860731e5b9ebf75d7d80a1db98a9cda",
+    "src/lib/game/ai/nnue/features.ts": "e943296b6e1224231d757c23faf6173b6f98a072",
+    "src/lib/game/ai/nnue/weights.ts": "83d6792b919d3f5ae6a4f17b716d399c46be0495",
+    "src/lib/game/ai/openingFilters.ts": "07eb6d9271d9102c95abbe1931db0264effc30f7",
+    "src/lib/game/ai/patterns.ts": "f8b61f42d38a19d3cc78b8511a39e85e6fdf0ce1",
+    "src/lib/game/ai/puzzles.ts": "15c4bc205365bea9d314c7c4c871a293ff086c4b",
+    "src/lib/game/ai/search.ts": "d3d1be34b6645c69c93717a651f34209ea77a5ac",
+    "src/lib/game/ai/synergy.ts": "bd3ae25d1c4a65fb72ed3cb4665c8aa3b9f3bf88",
+    "src/lib/game/ai/threats.ts": "3da2c9b7729611796aae41b1795498008829179d",
+    "src/lib/game/ai/timeManager.ts": "ba17f04fdd2132f201238c5cc82a90e61e2d677a",
+    "src/lib/game/ai/transposition.ts": "00acb932623eb894f29655c8a875da5b4d939a81",
+    "src/lib/game/ai/tss.ts": "afcec1cde189bb6efcd24d0a0233b12b6497c242",
+    "src/lib/game/ai/types.ts": "3db7424a4b456b1de3338e3521f2fbfaebe94256",
+    "src/lib/game/ai/ultraPvs.worker.ts": "461068e7d0507f11dcbd05bf9cb5d97ac5b8f1b1",
+    "src/lib/game/ai/ultraSearch.worker.ts": "2efd208ded0b4e25e71bf478eecfe589a17a7f60",
+    "src/lib/game/ai/ultraV2/UltraCoordinator.ts": "4549f77ab1a0e3cafa87d3c5685bf57c725dc05c",
+    "src/lib/game/ai/ultraV2/ultraV2.worker.ts": "364994c7a31c6795add9a1e09c53f1be82542012",
+    "src/lib/game/ai/utils.ts": "c618f5ace67d0b931bd67693f8a12ce846c3670b",
+    "src/lib/game/ai/zobrist.ts": "9746a09d3cb7dc0ff9983da86a743c959cfc736a"
+  },
+  "developmentSourceStages": {
+    "qcache": {
+      "scripts/compare_ai.mjs": "db7bbc54958af9e22a83c88d1c5a4c0efc3741bb",
+      "src/lib/game/ai.worker.ts": "1fcc1b3460fdec721fded5d08674f6f31195296c",
+      "src/lib/game/ai/benchmark.ts": "3fd1480f7b65c2f14f7ce1240291023653f9d12c",
+      "src/lib/game/ai/board.ts": "a3047daa985e2b86ff63c8ac0a7d021c2909b740",
+      "src/lib/game/ai/constants.ts": "fa2a3ddc3e563f60751560c5ba0397676f07cebd",
+      "src/lib/game/ai/dihedral.ts": "7b45cff307586586bf3d7f65d6cf0a8b73572e39",
+      "src/lib/game/ai/evaluate.ts": "dc6bd8a0c4d4fde43e157f569c3d58a92a4a7838",
+      "src/lib/game/ai/index.ts": "6af59cd88c35095bb3a5bcaecf88c19f519b4358",
+      "src/lib/game/ai/moveCodec.ts": "6df4bf13137020d647bc828c6246628a1a95bc82",
+      "src/lib/game/ai/moveGen.ts": "3d1d4dcd514168e7f7be5896c113d751a812d5d2",
+      "src/lib/game/ai/moveOrder.ts": "d375b72fab38d09a62825b8afbb0e62e47588634",
+      "src/lib/game/ai/nnue/evaluator.ts": "91450a383860731e5b9ebf75d7d80a1db98a9cda",
+      "src/lib/game/ai/nnue/features.ts": "e943296b6e1224231d757c23faf6173b6f98a072",
+      "src/lib/game/ai/nnue/weights.ts": "83d6792b919d3f5ae6a4f17b716d399c46be0495",
+      "src/lib/game/ai/openingFilters.ts": "07eb6d9271d9102c95abbe1931db0264effc30f7",
+      "src/lib/game/ai/patterns.ts": "4c8d0ec3cffa4620bd57056acb9b4b5e3b41eed2",
+      "src/lib/game/ai/puzzles.ts": "15c4bc205365bea9d314c7c4c871a293ff086c4b",
+      "src/lib/game/ai/search.ts": "3bd7d56353d93968c979fa37cc64976c949930d6",
+      "src/lib/game/ai/synergy.ts": "145d0b0e8d8c23e424b00531dccfac7f718ad28e",
+      "src/lib/game/ai/threats.ts": "097fdacaee722e7ecdaed1c1bee495de61abf626",
+      "src/lib/game/ai/timeManager.ts": "ba17f04fdd2132f201238c5cc82a90e61e2d677a",
+      "src/lib/game/ai/transposition.ts": "00acb932623eb894f29655c8a875da5b4d939a81",
+      "src/lib/game/ai/tss.ts": "3712bd7ca59da98bfada438fe286bb8bfe6576ee",
+      "src/lib/game/ai/types.ts": "3db7424a4b456b1de3338e3521f2fbfaebe94256",
+      "src/lib/game/ai/ultraPvs.worker.ts": "461068e7d0507f11dcbd05bf9cb5d97ac5b8f1b1",
+      "src/lib/game/ai/ultraSearch.worker.ts": "2efd208ded0b4e25e71bf478eecfe589a17a7f60",
+      "src/lib/game/ai/ultraV2/UltraCoordinator.ts": "4549f77ab1a0e3cafa87d3c5685bf57c725dc05c",
+      "src/lib/game/ai/ultraV2/ultraV2.worker.ts": "364994c7a31c6795add9a1e09c53f1be82542012",
+      "src/lib/game/ai/utils.ts": "c618f5ace67d0b931bd67693f8a12ce846c3670b",
+      "src/lib/game/ai/zobrist.ts": "9746a09d3cb7dc0ff9983da86a743c959cfc736a"
+    },
+    "tss": {
+      "scripts/compare_ai.mjs": "db7bbc54958af9e22a83c88d1c5a4c0efc3741bb",
+      "src/lib/game/ai.worker.ts": "1fcc1b3460fdec721fded5d08674f6f31195296c",
+      "src/lib/game/ai/benchmark.ts": "3fd1480f7b65c2f14f7ce1240291023653f9d12c",
+      "src/lib/game/ai/board.ts": "a3047daa985e2b86ff63c8ac0a7d021c2909b740",
+      "src/lib/game/ai/constants.ts": "fa2a3ddc3e563f60751560c5ba0397676f07cebd",
+      "src/lib/game/ai/dihedral.ts": "7b45cff307586586bf3d7f65d6cf0a8b73572e39",
+      "src/lib/game/ai/evaluate.ts": "dc6bd8a0c4d4fde43e157f569c3d58a92a4a7838",
+      "src/lib/game/ai/index.ts": "6af59cd88c35095bb3a5bcaecf88c19f519b4358",
+      "src/lib/game/ai/moveCodec.ts": "6df4bf13137020d647bc828c6246628a1a95bc82",
+      "src/lib/game/ai/moveGen.ts": "3d1d4dcd514168e7f7be5896c113d751a812d5d2",
+      "src/lib/game/ai/moveOrder.ts": "d375b72fab38d09a62825b8afbb0e62e47588634",
+      "src/lib/game/ai/nnue/evaluator.ts": "91450a383860731e5b9ebf75d7d80a1db98a9cda",
+      "src/lib/game/ai/nnue/features.ts": "e943296b6e1224231d757c23faf6173b6f98a072",
+      "src/lib/game/ai/nnue/weights.ts": "83d6792b919d3f5ae6a4f17b716d399c46be0495",
+      "src/lib/game/ai/openingFilters.ts": "07eb6d9271d9102c95abbe1931db0264effc30f7",
+      "src/lib/game/ai/patterns.ts": "4c8d0ec3cffa4620bd57056acb9b4b5e3b41eed2",
+      "src/lib/game/ai/puzzles.ts": "15c4bc205365bea9d314c7c4c871a293ff086c4b",
+      "src/lib/game/ai/search.ts": "416a4133e1cdcbc02db10abaec5806027874a84b",
+      "src/lib/game/ai/synergy.ts": "145d0b0e8d8c23e424b00531dccfac7f718ad28e",
+      "src/lib/game/ai/threats.ts": "097fdacaee722e7ecdaed1c1bee495de61abf626",
+      "src/lib/game/ai/timeManager.ts": "ba17f04fdd2132f201238c5cc82a90e61e2d677a",
+      "src/lib/game/ai/transposition.ts": "00acb932623eb894f29655c8a875da5b4d939a81",
+      "src/lib/game/ai/tss.ts": "afcec1cde189bb6efcd24d0a0233b12b6497c242",
+      "src/lib/game/ai/types.ts": "3db7424a4b456b1de3338e3521f2fbfaebe94256",
+      "src/lib/game/ai/ultraPvs.worker.ts": "461068e7d0507f11dcbd05bf9cb5d97ac5b8f1b1",
+      "src/lib/game/ai/ultraSearch.worker.ts": "2efd208ded0b4e25e71bf478eecfe589a17a7f60",
+      "src/lib/game/ai/ultraV2/UltraCoordinator.ts": "4549f77ab1a0e3cafa87d3c5685bf57c725dc05c",
+      "src/lib/game/ai/ultraV2/ultraV2.worker.ts": "364994c7a31c6795add9a1e09c53f1be82542012",
+      "src/lib/game/ai/utils.ts": "c618f5ace67d0b931bd67693f8a12ce846c3670b",
+      "src/lib/game/ai/zobrist.ts": "9746a09d3cb7dc0ff9983da86a743c959cfc736a"
+    },
+    "root": {
+      "scripts/compare_ai.mjs": "db7bbc54958af9e22a83c88d1c5a4c0efc3741bb",
+      "src/lib/game/ai.worker.ts": "1fcc1b3460fdec721fded5d08674f6f31195296c",
+      "src/lib/game/ai/benchmark.ts": "3fd1480f7b65c2f14f7ce1240291023653f9d12c",
+      "src/lib/game/ai/board.ts": "a3047daa985e2b86ff63c8ac0a7d021c2909b740",
+      "src/lib/game/ai/constants.ts": "fa2a3ddc3e563f60751560c5ba0397676f07cebd",
+      "src/lib/game/ai/dihedral.ts": "7b45cff307586586bf3d7f65d6cf0a8b73572e39",
+      "src/lib/game/ai/evaluate.ts": "dc6bd8a0c4d4fde43e157f569c3d58a92a4a7838",
+      "src/lib/game/ai/index.ts": "6af59cd88c35095bb3a5bcaecf88c19f519b4358",
+      "src/lib/game/ai/moveCodec.ts": "6df4bf13137020d647bc828c6246628a1a95bc82",
+      "src/lib/game/ai/moveGen.ts": "3d1d4dcd514168e7f7be5896c113d751a812d5d2",
+      "src/lib/game/ai/moveOrder.ts": "d375b72fab38d09a62825b8afbb0e62e47588634",
+      "src/lib/game/ai/nnue/evaluator.ts": "91450a383860731e5b9ebf75d7d80a1db98a9cda",
+      "src/lib/game/ai/nnue/features.ts": "e943296b6e1224231d757c23faf6173b6f98a072",
+      "src/lib/game/ai/nnue/weights.ts": "83d6792b919d3f5ae6a4f17b716d399c46be0495",
+      "src/lib/game/ai/openingFilters.ts": "07eb6d9271d9102c95abbe1931db0264effc30f7",
+      "src/lib/game/ai/patterns.ts": "4c8d0ec3cffa4620bd57056acb9b4b5e3b41eed2",
+      "src/lib/game/ai/puzzles.ts": "15c4bc205365bea9d314c7c4c871a293ff086c4b",
+      "src/lib/game/ai/search.ts": "6d404f531bcb7683be10f7310ec757752ba10fdf",
+      "src/lib/game/ai/synergy.ts": "145d0b0e8d8c23e424b00531dccfac7f718ad28e",
+      "src/lib/game/ai/threats.ts": "097fdacaee722e7ecdaed1c1bee495de61abf626",
+      "src/lib/game/ai/timeManager.ts": "ba17f04fdd2132f201238c5cc82a90e61e2d677a",
+      "src/lib/game/ai/transposition.ts": "00acb932623eb894f29655c8a875da5b4d939a81",
+      "src/lib/game/ai/tss.ts": "afcec1cde189bb6efcd24d0a0233b12b6497c242",
+      "src/lib/game/ai/types.ts": "3db7424a4b456b1de3338e3521f2fbfaebe94256",
+      "src/lib/game/ai/ultraPvs.worker.ts": "461068e7d0507f11dcbd05bf9cb5d97ac5b8f1b1",
+      "src/lib/game/ai/ultraSearch.worker.ts": "2efd208ded0b4e25e71bf478eecfe589a17a7f60",
+      "src/lib/game/ai/ultraV2/UltraCoordinator.ts": "4549f77ab1a0e3cafa87d3c5685bf57c725dc05c",
+      "src/lib/game/ai/ultraV2/ultraV2.worker.ts": "364994c7a31c6795add9a1e09c53f1be82542012",
+      "src/lib/game/ai/utils.ts": "c618f5ace67d0b931bd67693f8a12ce846c3670b",
+      "src/lib/game/ai/zobrist.ts": "9746a09d3cb7dc0ff9983da86a743c959cfc736a"
+    },
+    "symmetric": {
+      "scripts/compare_ai.mjs": "db7bbc54958af9e22a83c88d1c5a4c0efc3741bb",
+      "src/lib/game/ai.worker.ts": "1fcc1b3460fdec721fded5d08674f6f31195296c",
+      "src/lib/game/ai/benchmark.ts": "3fd1480f7b65c2f14f7ce1240291023653f9d12c",
+      "src/lib/game/ai/board.ts": "a3047daa985e2b86ff63c8ac0a7d021c2909b740",
+      "src/lib/game/ai/constants.ts": "fa2a3ddc3e563f60751560c5ba0397676f07cebd",
+      "src/lib/game/ai/dihedral.ts": "7b45cff307586586bf3d7f65d6cf0a8b73572e39",
+      "src/lib/game/ai/evaluate.ts": "76251c336087d42035e075aa37a0e97a4ac5847a",
+      "src/lib/game/ai/index.ts": "6af59cd88c35095bb3a5bcaecf88c19f519b4358",
+      "src/lib/game/ai/moveCodec.ts": "6df4bf13137020d647bc828c6246628a1a95bc82",
+      "src/lib/game/ai/moveGen.ts": "3d1d4dcd514168e7f7be5896c113d751a812d5d2",
+      "src/lib/game/ai/moveOrder.ts": "d375b72fab38d09a62825b8afbb0e62e47588634",
+      "src/lib/game/ai/nnue/evaluator.ts": "91450a383860731e5b9ebf75d7d80a1db98a9cda",
+      "src/lib/game/ai/nnue/features.ts": "e943296b6e1224231d757c23faf6173b6f98a072",
+      "src/lib/game/ai/nnue/weights.ts": "83d6792b919d3f5ae6a4f17b716d399c46be0495",
+      "src/lib/game/ai/openingFilters.ts": "07eb6d9271d9102c95abbe1931db0264effc30f7",
+      "src/lib/game/ai/patterns.ts": "4c8d0ec3cffa4620bd57056acb9b4b5e3b41eed2",
+      "src/lib/game/ai/puzzles.ts": "15c4bc205365bea9d314c7c4c871a293ff086c4b",
+      "src/lib/game/ai/search.ts": "6d404f531bcb7683be10f7310ec757752ba10fdf",
+      "src/lib/game/ai/synergy.ts": "145d0b0e8d8c23e424b00531dccfac7f718ad28e",
+      "src/lib/game/ai/threats.ts": "097fdacaee722e7ecdaed1c1bee495de61abf626",
+      "src/lib/game/ai/timeManager.ts": "ba17f04fdd2132f201238c5cc82a90e61e2d677a",
+      "src/lib/game/ai/transposition.ts": "00acb932623eb894f29655c8a875da5b4d939a81",
+      "src/lib/game/ai/tss.ts": "afcec1cde189bb6efcd24d0a0233b12b6497c242",
+      "src/lib/game/ai/types.ts": "3db7424a4b456b1de3338e3521f2fbfaebe94256",
+      "src/lib/game/ai/ultraPvs.worker.ts": "461068e7d0507f11dcbd05bf9cb5d97ac5b8f1b1",
+      "src/lib/game/ai/ultraSearch.worker.ts": "2efd208ded0b4e25e71bf478eecfe589a17a7f60",
+      "src/lib/game/ai/ultraV2/UltraCoordinator.ts": "4549f77ab1a0e3cafa87d3c5685bf57c725dc05c",
+      "src/lib/game/ai/ultraV2/ultraV2.worker.ts": "364994c7a31c6795add9a1e09c53f1be82542012",
+      "src/lib/game/ai/utils.ts": "c618f5ace67d0b931bd67693f8a12ce846c3670b",
+      "src/lib/game/ai/zobrist.ts": "9746a09d3cb7dc0ff9983da86a743c959cfc736a"
+    },
+    "horizon": {
+      "scripts/compare_ai.mjs": "db7bbc54958af9e22a83c88d1c5a4c0efc3741bb",
+      "src/lib/game/ai.worker.ts": "1fcc1b3460fdec721fded5d08674f6f31195296c",
+      "src/lib/game/ai/benchmark.ts": "3fd1480f7b65c2f14f7ce1240291023653f9d12c",
+      "src/lib/game/ai/board.ts": "a3047daa985e2b86ff63c8ac0a7d021c2909b740",
+      "src/lib/game/ai/constants.ts": "fa2a3ddc3e563f60751560c5ba0397676f07cebd",
+      "src/lib/game/ai/dihedral.ts": "7b45cff307586586bf3d7f65d6cf0a8b73572e39",
+      "src/lib/game/ai/evaluate.ts": "dc6bd8a0c4d4fde43e157f569c3d58a92a4a7838",
+      "src/lib/game/ai/index.ts": "6af59cd88c35095bb3a5bcaecf88c19f519b4358",
+      "src/lib/game/ai/moveCodec.ts": "6df4bf13137020d647bc828c6246628a1a95bc82",
+      "src/lib/game/ai/moveGen.ts": "3d1d4dcd514168e7f7be5896c113d751a812d5d2",
+      "src/lib/game/ai/moveOrder.ts": "d375b72fab38d09a62825b8afbb0e62e47588634",
+      "src/lib/game/ai/nnue/evaluator.ts": "91450a383860731e5b9ebf75d7d80a1db98a9cda",
+      "src/lib/game/ai/nnue/features.ts": "e943296b6e1224231d757c23faf6173b6f98a072",
+      "src/lib/game/ai/nnue/weights.ts": "83d6792b919d3f5ae6a4f17b716d399c46be0495",
+      "src/lib/game/ai/openingFilters.ts": "07eb6d9271d9102c95abbe1931db0264effc30f7",
+      "src/lib/game/ai/patterns.ts": "4c8d0ec3cffa4620bd57056acb9b4b5e3b41eed2",
+      "src/lib/game/ai/puzzles.ts": "15c4bc205365bea9d314c7c4c871a293ff086c4b",
+      "src/lib/game/ai/search.ts": "88cc82b84d4c0b8b14f715059fa03118e89639c2",
+      "src/lib/game/ai/synergy.ts": "145d0b0e8d8c23e424b00531dccfac7f718ad28e",
+      "src/lib/game/ai/threats.ts": "097fdacaee722e7ecdaed1c1bee495de61abf626",
+      "src/lib/game/ai/timeManager.ts": "ba17f04fdd2132f201238c5cc82a90e61e2d677a",
+      "src/lib/game/ai/transposition.ts": "00acb932623eb894f29655c8a875da5b4d939a81",
+      "src/lib/game/ai/tss.ts": "afcec1cde189bb6efcd24d0a0233b12b6497c242",
+      "src/lib/game/ai/types.ts": "3db7424a4b456b1de3338e3521f2fbfaebe94256",
+      "src/lib/game/ai/ultraPvs.worker.ts": "461068e7d0507f11dcbd05bf9cb5d97ac5b8f1b1",
+      "src/lib/game/ai/ultraSearch.worker.ts": "2efd208ded0b4e25e71bf478eecfe589a17a7f60",
+      "src/lib/game/ai/ultraV2/UltraCoordinator.ts": "4549f77ab1a0e3cafa87d3c5685bf57c725dc05c",
+      "src/lib/game/ai/ultraV2/ultraV2.worker.ts": "364994c7a31c6795add9a1e09c53f1be82542012",
+      "src/lib/game/ai/utils.ts": "c618f5ace67d0b931bd67693f8a12ce846c3670b",
+      "src/lib/game/ai/zobrist.ts": "9746a09d3cb7dc0ff9983da86a743c959cfc736a"
+    },
+    "scalar": {
+      "scripts/compare_ai.mjs": "db7bbc54958af9e22a83c88d1c5a4c0efc3741bb",
+      "src/lib/game/ai.worker.ts": "1fcc1b3460fdec721fded5d08674f6f31195296c",
+      "src/lib/game/ai/benchmark.ts": "3fd1480f7b65c2f14f7ce1240291023653f9d12c",
+      "src/lib/game/ai/board.ts": "a3047daa985e2b86ff63c8ac0a7d021c2909b740",
+      "src/lib/game/ai/constants.ts": "fa2a3ddc3e563f60751560c5ba0397676f07cebd",
+      "src/lib/game/ai/dihedral.ts": "7b45cff307586586bf3d7f65d6cf0a8b73572e39",
+      "src/lib/game/ai/evaluate.ts": "dc6bd8a0c4d4fde43e157f569c3d58a92a4a7838",
+      "src/lib/game/ai/index.ts": "6af59cd88c35095bb3a5bcaecf88c19f519b4358",
+      "src/lib/game/ai/moveCodec.ts": "6df4bf13137020d647bc828c6246628a1a95bc82",
+      "src/lib/game/ai/moveGen.ts": "3d1d4dcd514168e7f7be5896c113d751a812d5d2",
+      "src/lib/game/ai/moveOrder.ts": "d375b72fab38d09a62825b8afbb0e62e47588634",
+      "src/lib/game/ai/nnue/evaluator.ts": "91450a383860731e5b9ebf75d7d80a1db98a9cda",
+      "src/lib/game/ai/nnue/features.ts": "e943296b6e1224231d757c23faf6173b6f98a072",
+      "src/lib/game/ai/nnue/weights.ts": "83d6792b919d3f5ae6a4f17b716d399c46be0495",
+      "src/lib/game/ai/openingFilters.ts": "07eb6d9271d9102c95abbe1931db0264effc30f7",
+      "src/lib/game/ai/patterns.ts": "f8b61f42d38a19d3cc78b8511a39e85e6fdf0ce1",
+      "src/lib/game/ai/puzzles.ts": "15c4bc205365bea9d314c7c4c871a293ff086c4b",
+      "src/lib/game/ai/search.ts": "88cc82b84d4c0b8b14f715059fa03118e89639c2",
+      "src/lib/game/ai/synergy.ts": "bd3ae25d1c4a65fb72ed3cb4665c8aa3b9f3bf88",
+      "src/lib/game/ai/threats.ts": "3da2c9b7729611796aae41b1795498008829179d",
+      "src/lib/game/ai/timeManager.ts": "ba17f04fdd2132f201238c5cc82a90e61e2d677a",
+      "src/lib/game/ai/transposition.ts": "00acb932623eb894f29655c8a875da5b4d939a81",
+      "src/lib/game/ai/tss.ts": "afcec1cde189bb6efcd24d0a0233b12b6497c242",
+      "src/lib/game/ai/types.ts": "3db7424a4b456b1de3338e3521f2fbfaebe94256",
+      "src/lib/game/ai/ultraPvs.worker.ts": "461068e7d0507f11dcbd05bf9cb5d97ac5b8f1b1",
+      "src/lib/game/ai/ultraSearch.worker.ts": "2efd208ded0b4e25e71bf478eecfe589a17a7f60",
+      "src/lib/game/ai/ultraV2/UltraCoordinator.ts": "4549f77ab1a0e3cafa87d3c5685bf57c725dc05c",
+      "src/lib/game/ai/ultraV2/ultraV2.worker.ts": "364994c7a31c6795add9a1e09c53f1be82542012",
+      "src/lib/game/ai/utils.ts": "c618f5ace67d0b931bd67693f8a12ce846c3670b",
+      "src/lib/game/ai/zobrist.ts": "9746a09d3cb7dc0ff9983da86a743c959cfc736a"
+    },
+    "fast-horizon": {
+      "scripts/compare_ai.mjs": "db7bbc54958af9e22a83c88d1c5a4c0efc3741bb",
+      "src/lib/game/ai.worker.ts": "1fcc1b3460fdec721fded5d08674f6f31195296c",
+      "src/lib/game/ai/benchmark.ts": "3fd1480f7b65c2f14f7ce1240291023653f9d12c",
+      "src/lib/game/ai/board.ts": "a3047daa985e2b86ff63c8ac0a7d021c2909b740",
+      "src/lib/game/ai/constants.ts": "fa2a3ddc3e563f60751560c5ba0397676f07cebd",
+      "src/lib/game/ai/dihedral.ts": "7b45cff307586586bf3d7f65d6cf0a8b73572e39",
+      "src/lib/game/ai/evaluate.ts": "dc6bd8a0c4d4fde43e157f569c3d58a92a4a7838",
+      "src/lib/game/ai/index.ts": "6af59cd88c35095bb3a5bcaecf88c19f519b4358",
+      "src/lib/game/ai/moveCodec.ts": "6df4bf13137020d647bc828c6246628a1a95bc82",
+      "src/lib/game/ai/moveGen.ts": "1e9e9beecca3c0827ec1c8c7102f33f54128156b",
+      "src/lib/game/ai/moveOrder.ts": "d375b72fab38d09a62825b8afbb0e62e47588634",
+      "src/lib/game/ai/nnue/evaluator.ts": "91450a383860731e5b9ebf75d7d80a1db98a9cda",
+      "src/lib/game/ai/nnue/features.ts": "e943296b6e1224231d757c23faf6173b6f98a072",
+      "src/lib/game/ai/nnue/weights.ts": "83d6792b919d3f5ae6a4f17b716d399c46be0495",
+      "src/lib/game/ai/openingFilters.ts": "07eb6d9271d9102c95abbe1931db0264effc30f7",
+      "src/lib/game/ai/patterns.ts": "f8b61f42d38a19d3cc78b8511a39e85e6fdf0ce1",
+      "src/lib/game/ai/puzzles.ts": "15c4bc205365bea9d314c7c4c871a293ff086c4b",
+      "src/lib/game/ai/search.ts": "2784ed08f7e12137a0f81ed25f37cf13a17dd8c3",
+      "src/lib/game/ai/synergy.ts": "bd3ae25d1c4a65fb72ed3cb4665c8aa3b9f3bf88",
+      "src/lib/game/ai/threats.ts": "3da2c9b7729611796aae41b1795498008829179d",
+      "src/lib/game/ai/timeManager.ts": "ba17f04fdd2132f201238c5cc82a90e61e2d677a",
+      "src/lib/game/ai/transposition.ts": "00acb932623eb894f29655c8a875da5b4d939a81",
+      "src/lib/game/ai/tss.ts": "afcec1cde189bb6efcd24d0a0233b12b6497c242",
+      "src/lib/game/ai/types.ts": "3db7424a4b456b1de3338e3521f2fbfaebe94256",
+      "src/lib/game/ai/ultraPvs.worker.ts": "461068e7d0507f11dcbd05bf9cb5d97ac5b8f1b1",
+      "src/lib/game/ai/ultraSearch.worker.ts": "2efd208ded0b4e25e71bf478eecfe589a17a7f60",
+      "src/lib/game/ai/ultraV2/UltraCoordinator.ts": "4549f77ab1a0e3cafa87d3c5685bf57c725dc05c",
+      "src/lib/game/ai/ultraV2/ultraV2.worker.ts": "364994c7a31c6795add9a1e09c53f1be82542012",
+      "src/lib/game/ai/utils.ts": "c618f5ace67d0b931bd67693f8a12ce846c3670b",
+      "src/lib/game/ai/zobrist.ts": "9746a09d3cb7dc0ff9983da86a743c959cfc736a"
+    },
+    "q2": {
+      "scripts/compare_ai.mjs": "db7bbc54958af9e22a83c88d1c5a4c0efc3741bb",
+      "src/lib/game/ai.worker.ts": "1fcc1b3460fdec721fded5d08674f6f31195296c",
+      "src/lib/game/ai/benchmark.ts": "3fd1480f7b65c2f14f7ce1240291023653f9d12c",
+      "src/lib/game/ai/board.ts": "a3047daa985e2b86ff63c8ac0a7d021c2909b740",
+      "src/lib/game/ai/constants.ts": "6826b72bd94849646551e429e61e21a278d35c88",
+      "src/lib/game/ai/dihedral.ts": "7b45cff307586586bf3d7f65d6cf0a8b73572e39",
+      "src/lib/game/ai/evaluate.ts": "dc6bd8a0c4d4fde43e157f569c3d58a92a4a7838",
+      "src/lib/game/ai/index.ts": "6af59cd88c35095bb3a5bcaecf88c19f519b4358",
+      "src/lib/game/ai/moveCodec.ts": "6df4bf13137020d647bc828c6246628a1a95bc82",
+      "src/lib/game/ai/moveGen.ts": "1e9e9beecca3c0827ec1c8c7102f33f54128156b",
+      "src/lib/game/ai/moveOrder.ts": "d375b72fab38d09a62825b8afbb0e62e47588634",
+      "src/lib/game/ai/nnue/evaluator.ts": "91450a383860731e5b9ebf75d7d80a1db98a9cda",
+      "src/lib/game/ai/nnue/features.ts": "e943296b6e1224231d757c23faf6173b6f98a072",
+      "src/lib/game/ai/nnue/weights.ts": "83d6792b919d3f5ae6a4f17b716d399c46be0495",
+      "src/lib/game/ai/openingFilters.ts": "07eb6d9271d9102c95abbe1931db0264effc30f7",
+      "src/lib/game/ai/patterns.ts": "f8b61f42d38a19d3cc78b8511a39e85e6fdf0ce1",
+      "src/lib/game/ai/puzzles.ts": "15c4bc205365bea9d314c7c4c871a293ff086c4b",
+      "src/lib/game/ai/search.ts": "2784ed08f7e12137a0f81ed25f37cf13a17dd8c3",
+      "src/lib/game/ai/synergy.ts": "bd3ae25d1c4a65fb72ed3cb4665c8aa3b9f3bf88",
+      "src/lib/game/ai/threats.ts": "3da2c9b7729611796aae41b1795498008829179d",
+      "src/lib/game/ai/timeManager.ts": "ba17f04fdd2132f201238c5cc82a90e61e2d677a",
+      "src/lib/game/ai/transposition.ts": "00acb932623eb894f29655c8a875da5b4d939a81",
+      "src/lib/game/ai/tss.ts": "afcec1cde189bb6efcd24d0a0233b12b6497c242",
+      "src/lib/game/ai/types.ts": "3db7424a4b456b1de3338e3521f2fbfaebe94256",
+      "src/lib/game/ai/ultraPvs.worker.ts": "461068e7d0507f11dcbd05bf9cb5d97ac5b8f1b1",
+      "src/lib/game/ai/ultraSearch.worker.ts": "2efd208ded0b4e25e71bf478eecfe589a17a7f60",
+      "src/lib/game/ai/ultraV2/UltraCoordinator.ts": "4549f77ab1a0e3cafa87d3c5685bf57c725dc05c",
+      "src/lib/game/ai/ultraV2/ultraV2.worker.ts": "364994c7a31c6795add9a1e09c53f1be82542012",
+      "src/lib/game/ai/utils.ts": "c618f5ace67d0b931bd67693f8a12ce846c3670b",
+      "src/lib/game/ai/zobrist.ts": "9746a09d3cb7dc0ff9983da86a743c959cfc736a"
+    },
+    "scoped": {
+      "scripts/compare_ai.mjs": "db7bbc54958af9e22a83c88d1c5a4c0efc3741bb",
+      "src/lib/game/ai.worker.ts": "1fcc1b3460fdec721fded5d08674f6f31195296c",
+      "src/lib/game/ai/benchmark.ts": "3fd1480f7b65c2f14f7ce1240291023653f9d12c",
+      "src/lib/game/ai/board.ts": "a3047daa985e2b86ff63c8ac0a7d021c2909b740",
+      "src/lib/game/ai/constants.ts": "ced94d15777004741dd3ea152828a30a46911a1f",
+      "src/lib/game/ai/dihedral.ts": "7b45cff307586586bf3d7f65d6cf0a8b73572e39",
+      "src/lib/game/ai/evaluate.ts": "dc6bd8a0c4d4fde43e157f569c3d58a92a4a7838",
+      "src/lib/game/ai/index.ts": "6af59cd88c35095bb3a5bcaecf88c19f519b4358",
+      "src/lib/game/ai/moveCodec.ts": "6df4bf13137020d647bc828c6246628a1a95bc82",
+      "src/lib/game/ai/moveGen.ts": "1e9e9beecca3c0827ec1c8c7102f33f54128156b",
+      "src/lib/game/ai/moveOrder.ts": "d375b72fab38d09a62825b8afbb0e62e47588634",
+      "src/lib/game/ai/nnue/evaluator.ts": "91450a383860731e5b9ebf75d7d80a1db98a9cda",
+      "src/lib/game/ai/nnue/features.ts": "e943296b6e1224231d757c23faf6173b6f98a072",
+      "src/lib/game/ai/nnue/weights.ts": "83d6792b919d3f5ae6a4f17b716d399c46be0495",
+      "src/lib/game/ai/openingFilters.ts": "07eb6d9271d9102c95abbe1931db0264effc30f7",
+      "src/lib/game/ai/patterns.ts": "f8b61f42d38a19d3cc78b8511a39e85e6fdf0ce1",
+      "src/lib/game/ai/puzzles.ts": "15c4bc205365bea9d314c7c4c871a293ff086c4b",
+      "src/lib/game/ai/search.ts": "d3d1be34b6645c69c93717a651f34209ea77a5ac",
+      "src/lib/game/ai/synergy.ts": "bd3ae25d1c4a65fb72ed3cb4665c8aa3b9f3bf88",
+      "src/lib/game/ai/threats.ts": "3da2c9b7729611796aae41b1795498008829179d",
+      "src/lib/game/ai/timeManager.ts": "ba17f04fdd2132f201238c5cc82a90e61e2d677a",
+      "src/lib/game/ai/transposition.ts": "00acb932623eb894f29655c8a875da5b4d939a81",
+      "src/lib/game/ai/tss.ts": "afcec1cde189bb6efcd24d0a0233b12b6497c242",
+      "src/lib/game/ai/types.ts": "3db7424a4b456b1de3338e3521f2fbfaebe94256",
+      "src/lib/game/ai/ultraPvs.worker.ts": "461068e7d0507f11dcbd05bf9cb5d97ac5b8f1b1",
+      "src/lib/game/ai/ultraSearch.worker.ts": "2efd208ded0b4e25e71bf478eecfe589a17a7f60",
+      "src/lib/game/ai/ultraV2/UltraCoordinator.ts": "4549f77ab1a0e3cafa87d3c5685bf57c725dc05c",
+      "src/lib/game/ai/ultraV2/ultraV2.worker.ts": "364994c7a31c6795add9a1e09c53f1be82542012",
+      "src/lib/game/ai/utils.ts": "c618f5ace67d0b931bd67693f8a12ce846c3670b",
+      "src/lib/game/ai/zobrist.ts": "9746a09d3cb7dc0ff9983da86a743c959cfc736a"
+    }
+  },
+  "validation": {
+    "testsPassed": 35,
+    "tacticalPuzzlesPassed": 14,
+    "tacticalPuzzleTimeMs": 250,
+    "typeErrors": 0,
+    "typeWarnings": 0,
+    "productionBuild": "passed",
+    "browserEndToEnd": "not tested",
+    "nnueActiveInApplication": false,
+    "cacheAblation": {
+      "cacheHits": 398,
+      "cases": [
+        {
+          "fixture": 0,
+          "target": 1,
+          "score": 445
+        },
+        {
+          "fixture": 0,
+          "target": 3,
+          "score": 445
+        },
+        {
+          "fixture": 1,
+          "target": 1,
+          "score": 19784
+        },
+        {
+          "fixture": 1,
+          "target": 3,
+          "score": 19784
+        },
+        {
+          "fixture": 2,
+          "target": 1,
+          "score": 19868
+        },
+        {
+          "fixture": 2,
+          "target": 3,
+          "score": 19868
+        },
+        {
+          "fixture": 3,
+          "target": 1,
+          "score": 8999997
+        },
+        {
+          "fixture": 3,
+          "target": 3,
+          "score": 4126816
+        }
+      ]
+    },
+    "multiPointDepthDiagnostic": [
+      {
+        "game": 1,
+        "moveIndex": 61,
+        "quiescenceDepth": 2,
+        "completed": true,
+        "score": -2378524,
+        "move": null,
+        "nodes": 48,
+        "depth": 0,
+        "elapsedMs": 24.68262
+      },
+      {
+        "game": 1,
+        "moveIndex": 61,
+        "quiescenceDepth": 4,
+        "completed": true,
+        "score": 8999995,
+        "move": null,
+        "nodes": 379,
+        "depth": 0,
+        "elapsedMs": 132.58351800000003
+      },
+      {
+        "game": 2,
+        "moveIndex": 34,
+        "quiescenceDepth": 2,
+        "completed": true,
+        "score": -1874013,
+        "move": null,
+        "nodes": 26,
+        "depth": 0,
+        "elapsedMs": 8.732068999999996
+      },
+      {
+        "game": 2,
+        "moveIndex": 34,
+        "quiescenceDepth": 4,
+        "completed": true,
+        "score": 8999995,
+        "move": null,
+        "nodes": 789,
+        "depth": 0,
+        "elapsedMs": 115.114664
+      }
+    ]
+  },
+  "method": {
+    "initialBoardEncoding": "black and white contain zero-based row-major cell indices (row * 15 + column); ko is the forbidden index or null",
+    "mainTtAndOrderingResetPerGame": true,
+    "tssRootCacheResetPerGame": false,
+    "timedSuitesSerial": true,
+    "developmentStartSeed": 47001,
+    "predeclaredValidation": {
+      "prior": {
+        "games": 20,
+        "seed": 52001
+      },
+      "original": {
+        "games": 20,
+        "seed": 56001
+      },
+      "multipoint": {
+        "games": 4,
+        "seed": 59001
+      },
+      "full": {
+        "games": 2,
+        "seed": 101
+      }
+    },
+    "additionalMultiPointChecksAfterRegression": {
+      "reusedSeed": 59001,
+      "reusedGames": 4,
+      "newSeed": 63001,
+      "newGames": 4
+    },
+    "warning": "Do not pool variants or conditions. New seeds may repeat initial boards, including development boards. Main-depth and nodes/sec changes are not direct Elo measurements."
+  },
+  "benchmarks": {
+    "before": "Tactical puzzles (timeLimitMs=100)\nPassed: 14  Failed: 0  Elapsed: 1226ms\n\nNPS benchmark\nConfig: timeLimitMs=400 maxDepth=10 iterations=5\nopening_center_cluster    nps=19201  avgDepth=1.00  nodes=38402  ms=2000\nmidgame_tactical_forkish  nps=24857  avgDepth=3.00  nodes=49713  ms=2000\nko_edge_defense           nps=16270  avgDepth=1.00  nodes=32540  ms=2000\ndense_midgame_cluster     nps=43676  avgDepth=1.00  nodes=87351  ms=2000\nTotal: nps=26001  nodes=208006  ms=8000\n",
+    "qcache": "Tactical puzzles (timeLimitMs=100)\nPassed: 14  Failed: 0  Elapsed: 1225ms\n\nNPS benchmark\nConfig: timeLimitMs=400 maxDepth=10 iterations=5\nopening_center_cluster    nps=21211  avgDepth=1.00  nodes=42422  ms=2000\nmidgame_tactical_forkish  nps=27545  avgDepth=4.00  nodes=55090  ms=2000\nko_edge_defense           nps=16890  avgDepth=1.00  nodes=33780  ms=2000\ndense_midgame_cluster     nps=43036  avgDepth=1.00  nodes=86072  ms=2000\nTotal: nps=27171  nodes=217364  ms=8000\n",
+    "scalar": "Tactical puzzles (timeLimitMs=100)\nPassed: 14  Failed: 0  Elapsed: 1225ms\n\nNPS benchmark\nConfig: timeLimitMs=400 maxDepth=10 iterations=5\nopening_center_cluster    nps=10842  avgDepth=1.00  nodes=21683  ms=2000\nmidgame_tactical_forkish  nps=21773  avgDepth=3.00  nodes=43545  ms=2000\nko_edge_defense           nps=29229  avgDepth=1.00  nodes=58458  ms=2000\ndense_midgame_cluster     nps=20942  avgDepth=0.00  nodes=41884  ms=2000\nTotal: nps=20696  nodes=165570  ms=8000\n",
+    "fast-horizon": "Tactical puzzles (timeLimitMs=100)\nPassed: 14  Failed: 0  Elapsed: 1227ms\n\nNPS benchmark\nConfig: timeLimitMs=400 maxDepth=10 iterations=5\nopening_center_cluster    nps=18503  avgDepth=1.00  nodes=37024  ms=2001\nmidgame_tactical_forkish  nps=23348  avgDepth=3.00  nodes=46696  ms=2000\nko_edge_defense           nps=14675  avgDepth=1.00  nodes=29349  ms=2000\ndense_midgame_cluster     nps=33774  avgDepth=1.00  nodes=40765  ms=1207\nTotal: nps=21342  nodes=153834  ms=7208\n",
+    "q2": "Tactical puzzles (timeLimitMs=100)\nPassed: 14  Failed: 0  Elapsed: 1224ms\n\nNPS benchmark\nConfig: timeLimitMs=400 maxDepth=10 iterations=5\nopening_center_cluster    nps=18682  avgDepth=4.00  nodes=37363  ms=2000\nmidgame_tactical_forkish  nps=22645  avgDepth=5.00  nodes=45289  ms=2000\nko_edge_defense           nps=16943  avgDepth=3.00  nodes=33885  ms=2000\ndense_midgame_cluster     nps=23321  avgDepth=3.00  nodes=46642  ms=2000\nTotal: nps=20397  nodes=163179  ms=8000\n",
+    "final": "Tactical puzzles (timeLimitMs=100)\nPassed: 14  Failed: 0  Elapsed: 1225ms\n\nNPS benchmark\nConfig: timeLimitMs=400 maxDepth=10 iterations=5\nopening_center_cluster    nps=17684  avgDepth=4.00  nodes=35368  ms=2000\nmidgame_tactical_forkish  nps=21840  avgDepth=5.00  nodes=43679  ms=2000\nko_edge_defense           nps=17039  avgDepth=3.00  nodes=34078  ms=2000\ndense_midgame_cluster     nps=24561  avgDepth=3.00  nodes=49122  ms=2000\nTotal: nps=20281  nodes=162247  ms=8000\n"
+  },
+  "patternCategoryMicrobenchmark": {
+    "calls": 210160,
+    "results": [
+      {
+        "full": {
+          "hits": 63940,
+          "ms": 9.391731000000007
+        },
+        "scalar": {
+          "hits": 63940,
+          "ms": 7.094448999999997
+        }
+      },
+      {
+        "scalar": {
+          "hits": 63940,
+          "ms": 7.358828000000003
+        },
+        "full": {
+          "hits": 63940,
+          "ms": 9.237414000000001
+        }
+      },
+      {
+        "full": {
+          "hits": 63940,
+          "ms": 9.435164
+        },
+        "scalar": {
+          "hits": 63940,
+          "ms": 7.915874999999986
+        }
+      },
+      {
+        "scalar": {
+          "hits": 63940,
+          "ms": 6.782571999999988
+        },
+        "full": {
+          "hits": 63940,
+          "ms": 9.537975000000017
+        }
+      },
+      {
+        "full": {
+          "hits": 63940,
+          "ms": 8.834823999999998
+        },
+        "scalar": {
+          "hits": 63940,
+          "ms": 7.029774000000003
+        }
+      },
+      {
+        "scalar": {
+          "hits": 63940,
+          "ms": 6.673171999999994
+        },
+        "full": {
+          "hits": 63940,
+          "ms": 9.280417
+        }
+      },
+      {
+        "full": {
+          "hits": 63940,
+          "ms": 9.40485000000001
+        },
+        "scalar": {
+          "hits": 63940,
+          "ms": 6.907826
+        }
+      }
+    ]
+  },
+  "suites": [
+    {
+      "games": 8,
+      "timeMs": 600,
+      "maxPlies": 80,
+      "target": 1,
+      "startSeed": 47001,
+      "bundled": true,
+      "bookWidth": 50,
+      "opening": "long-pro with seeded White first pair; engines choose restricted Black second move; colors swapped per seed",
+      "illegalPolicy": "fallback",
+      "currentWins": 3,
+      "referenceWins": 5,
+      "draws": 0,
+      "illegalMoveForfeits": 0,
+      "results": [
+        {
+          "seed": 47001,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 23,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              97
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47001,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 23,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              97
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47098,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 24,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              113
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47098,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 39,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              113
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47195,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 23,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              83,
+              96
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47195,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 23,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              83,
+              96
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47292,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 18,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              111
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47292,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 18,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              111
+            ],
+            "ko": null
+          }
+        }
+      ],
+      "id": "qcache-development",
+      "phase": "development",
+      "referenceCommit": "01e8a226317dbac8d69ec1331de9e9cbb4b167ab",
+      "notes": "Same-depth quiescence cache only.",
+      "sourceStage": "qcache",
+      "moveGeneration": {
+        "callsPerRound": 400,
+        "identicalOutputs": true,
+        "rounds": 5,
+        "bundled": true,
+        "currentMs": 20.36127399999998,
+        "referenceMs": 18.22657499999997,
+        "speedup": 0.8951588687426919
+      },
+      "uniqueInitialBoards": 4,
+      "currentWinsByColor": {
+        "1": 2,
+        "2": 1
+      },
+      "repairsByEngine": {
+        "current": 0,
+        "reference": 0
+      }
+    },
+    {
+      "games": 8,
+      "timeMs": 600,
+      "maxPlies": 80,
+      "target": 1,
+      "startSeed": 47001,
+      "bundled": true,
+      "bookWidth": 50,
+      "opening": "long-pro with seeded White first pair; engines choose restricted Black second move; colors swapped per seed",
+      "illegalPolicy": "fallback",
+      "currentWins": 4,
+      "referenceWins": 4,
+      "draws": 0,
+      "illegalMoveForfeits": 0,
+      "results": [
+        {
+          "seed": 47001,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 23,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              97
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47001,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 23,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              97
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47098,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 35,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              113
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47098,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 39,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              113
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47195,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 23,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              83,
+              96
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47195,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 23,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              83,
+              96
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47292,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 18,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              111
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47292,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 18,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              111
+            ],
+            "ko": null
+          }
+        }
+      ],
+      "id": "tss-development",
+      "phase": "development",
+      "referenceCommit": "01e8a226317dbac8d69ec1331de9e9cbb4b167ab",
+      "notes": "Add shared complete TSS evasions and full-width limit keys.",
+      "sourceStage": "tss",
+      "moveGeneration": {
+        "callsPerRound": 400,
+        "identicalOutputs": true,
+        "rounds": 5,
+        "bundled": true,
+        "currentMs": 22.075775999999905,
+        "referenceMs": 22.186338999999975,
+        "speedup": 1.005008340363667
+      },
+      "uniqueInitialBoards": 4,
+      "currentWinsByColor": {
+        "1": 3,
+        "2": 1
+      },
+      "repairsByEngine": {
+        "current": 0,
+        "reference": 0
+      }
+    },
+    {
+      "games": 8,
+      "timeMs": 600,
+      "maxPlies": 80,
+      "target": 1,
+      "startSeed": 47001,
+      "bundled": true,
+      "bookWidth": 50,
+      "opening": "long-pro with seeded White first pair; engines choose restricted Black second move; colors swapped per seed",
+      "illegalPolicy": "fallback",
+      "currentWins": 4,
+      "referenceWins": 4,
+      "draws": 0,
+      "illegalMoveForfeits": 0,
+      "results": [
+        {
+          "seed": 47001,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 23,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              97
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47001,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 19,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              97
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47098,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 35,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              113
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47098,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 39,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              113
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47195,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 23,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              83,
+              96
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47195,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 23,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              83,
+              96
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47292,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 18,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              111
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47292,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 28,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              111
+            ],
+            "ko": null
+          }
+        }
+      ],
+      "id": "root-development",
+      "phase": "development",
+      "referenceCommit": "01e8a226317dbac8d69ec1331de9e9cbb4b167ab",
+      "notes": "Add immediate same-depth root widening and separate root TT bounds.",
+      "sourceStage": "root",
+      "moveGeneration": {
+        "callsPerRound": 400,
+        "identicalOutputs": true,
+        "rounds": 5,
+        "bundled": true,
+        "currentMs": 20.74623699999995,
+        "referenceMs": 21.572610999999995,
+        "speedup": 1.0398324766076879
+      },
+      "uniqueInitialBoards": 4,
+      "currentWinsByColor": {
+        "1": 3,
+        "2": 1
+      },
+      "repairsByEngine": {
+        "current": 0,
+        "reference": 0
+      }
+    },
+    {
+      "games": 8,
+      "timeMs": 600,
+      "maxPlies": 80,
+      "target": 1,
+      "startSeed": 47001,
+      "bundled": true,
+      "bookWidth": 50,
+      "opening": "long-pro with seeded White first pair; engines choose restricted Black second move; colors swapped per seed",
+      "illegalPolicy": "fallback",
+      "currentWins": 3,
+      "referenceWins": 5,
+      "draws": 0,
+      "illegalMoveForfeits": 0,
+      "results": [
+        {
+          "seed": 47001,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 28,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              97
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47001,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 43,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              97
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47098,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 19,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              113
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47098,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 37,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              113
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47195,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 20,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              83,
+              96
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47195,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 24,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              83,
+              96
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47292,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 26,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              111
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47292,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 22,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              111
+            ],
+            "ko": null
+          }
+        }
+      ],
+      "id": "symmetric-development",
+      "phase": "development",
+      "referenceCommit": "01e8a226317dbac8d69ec1331de9e9cbb4b167ab",
+      "notes": "Try symmetric evaluation; rejected.",
+      "sourceStage": "symmetric",
+      "moveGeneration": {
+        "callsPerRound": 400,
+        "identicalOutputs": true,
+        "rounds": 5,
+        "bundled": true,
+        "currentMs": 24.209951000000046,
+        "referenceMs": 23.540321999999946,
+        "speedup": 0.9723407536016864
+      },
+      "uniqueInitialBoards": 4,
+      "currentWinsByColor": {
+        "1": 1,
+        "2": 2
+      },
+      "repairsByEngine": {
+        "current": 0,
+        "reference": 0
+      }
+    },
+    {
+      "games": 8,
+      "timeMs": 600,
+      "maxPlies": 80,
+      "target": 1,
+      "startSeed": 47001,
+      "bundled": true,
+      "bookWidth": 50,
+      "opening": "long-pro with seeded White first pair; engines choose restricted Black second move; colors swapped per seed",
+      "illegalPolicy": "fallback",
+      "currentWins": 3,
+      "referenceWins": 5,
+      "draws": 0,
+      "illegalMoveForfeits": 0,
+      "results": [
+        {
+          "seed": 47001,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 25,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              97
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47001,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 23,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              97
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47098,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 38,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              113
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47098,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 30,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              113
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47195,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 25,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              83,
+              96
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47195,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 21,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              83,
+              96
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47292,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 18,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              111
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47292,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 29,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              111
+            ],
+            "ko": null
+          }
+        }
+      ],
+      "id": "horizon-development",
+      "phase": "development",
+      "referenceCommit": "01e8a226317dbac8d69ec1331de9e9cbb4b167ab",
+      "notes": "Restore asymmetric evaluation; add exact no-evasion horizon losses and up to two extra forced plies with at most eight evasions.",
+      "sourceStage": "horizon",
+      "moveGeneration": {
+        "callsPerRound": 400,
+        "identicalOutputs": true,
+        "rounds": 5,
+        "bundled": true,
+        "currentMs": 20.615692999999965,
+        "referenceMs": 20.05296800000002,
+        "speedup": 0.9727040463786522
+      },
+      "uniqueInitialBoards": 4,
+      "currentWinsByColor": {
+        "1": 2,
+        "2": 1
+      },
+      "repairsByEngine": {
+        "current": 0,
+        "reference": 0
+      }
+    },
+    {
+      "games": 8,
+      "timeMs": 600,
+      "maxPlies": 80,
+      "target": 1,
+      "startSeed": 47001,
+      "bundled": true,
+      "bookWidth": 50,
+      "opening": "long-pro with seeded White first pair; engines choose restricted Black second move; colors swapped per seed",
+      "illegalPolicy": "fallback",
+      "currentWins": 4,
+      "referenceWins": 4,
+      "draws": 0,
+      "illegalMoveForfeits": 0,
+      "results": [
+        {
+          "seed": 47001,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 35,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              97
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47001,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 19,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              97
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47098,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 39,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              113
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47098,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 30,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              113
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47195,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 25,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              83,
+              96
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47195,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 21,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              83,
+              96
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47292,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 18,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              111
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47292,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 29,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              111
+            ],
+            "ko": null
+          }
+        }
+      ],
+      "id": "scalar-development",
+      "phase": "development",
+      "referenceCommit": "01e8a226317dbac8d69ec1331de9e9cbb4b167ab",
+      "notes": "Add allocation-free pattern categories to the extended-horizon candidate.",
+      "sourceStage": "scalar",
+      "moveGeneration": {
+        "callsPerRound": 400,
+        "identicalOutputs": true,
+        "rounds": 5,
+        "bundled": true,
+        "currentMs": 22.728099000000043,
+        "referenceMs": 25.009723000000008,
+        "speedup": 1.1003878063009125
+      },
+      "uniqueInitialBoards": 4,
+      "currentWinsByColor": {
+        "1": 3,
+        "2": 1
+      },
+      "repairsByEngine": {
+        "current": 0,
+        "reference": 0
+      }
+    },
+    {
+      "games": 8,
+      "timeMs": 600,
+      "maxPlies": 80,
+      "target": 1,
+      "startSeed": 47001,
+      "bundled": true,
+      "bookWidth": 50,
+      "opening": "long-pro with seeded White first pair; engines choose restricted Black second move; colors swapped per seed",
+      "illegalPolicy": "fallback",
+      "currentWins": 4,
+      "referenceWins": 4,
+      "draws": 0,
+      "illegalMoveForfeits": 0,
+      "results": [
+        {
+          "seed": 47001,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 23,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              97
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47001,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 23,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              97
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47098,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 35,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              113
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47098,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 39,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              113
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47195,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 25,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              83,
+              96
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47195,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 23,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              83,
+              96
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47292,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 18,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              111
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47292,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 38,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              111
+            ],
+            "ko": null
+          }
+        }
+      ],
+      "id": "fast-horizon-development",
+      "phase": "development",
+      "referenceCommit": "01e8a226317dbac8d69ec1331de9e9cbb4b167ab",
+      "notes": "Remove extra forced plies; use first-evasion existence check at the boundary.",
+      "sourceStage": "fast-horizon",
+      "moveGeneration": {
+        "callsPerRound": 400,
+        "identicalOutputs": true,
+        "rounds": 5,
+        "bundled": true,
+        "currentMs": 24.42110600000001,
+        "referenceMs": 23.62528800000007,
+        "speedup": 0.9674126962144982
+      },
+      "uniqueInitialBoards": 4,
+      "currentWinsByColor": {
+        "1": 3,
+        "2": 1
+      },
+      "repairsByEngine": {
+        "current": 0,
+        "reference": 0
+      }
+    },
+    {
+      "games": 8,
+      "timeMs": 600,
+      "maxPlies": 80,
+      "target": 1,
+      "startSeed": 47001,
+      "bundled": true,
+      "bookWidth": 50,
+      "opening": "long-pro with seeded White first pair; engines choose restricted Black second move; colors swapped per seed",
+      "illegalPolicy": "fallback",
+      "currentWins": 5,
+      "referenceWins": 3,
+      "draws": 0,
+      "illegalMoveForfeits": 0,
+      "results": [
+        {
+          "seed": 47001,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 27,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              97
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47001,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 19,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              97
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47098,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 16,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              113
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47098,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 20,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              113
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47195,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 19,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              83,
+              96
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47195,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 25,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              83,
+              96
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47292,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 25,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              111
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 47292,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 24,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              111
+            ],
+            "ko": null
+          }
+        }
+      ],
+      "id": "q2-development",
+      "phase": "development",
+      "referenceCommit": "01e8a226317dbac8d69ec1331de9e9cbb4b167ab",
+      "notes": "Reduce quiescence depth from four to two for all targets; initial validation candidate, later limited to one-point play.",
+      "sourceStage": "q2",
+      "moveGeneration": {
+        "callsPerRound": 400,
+        "identicalOutputs": true,
+        "rounds": 5,
+        "bundled": true,
+        "currentMs": 24.44320700000003,
+        "referenceMs": 20.693292000000042,
+        "speedup": 0.8465866201599495
+      },
+      "uniqueInitialBoards": 4,
+      "currentWinsByColor": {
+        "1": 3,
+        "2": 2
+      },
+      "repairsByEngine": {
+        "current": 0,
+        "reference": 0
+      }
+    },
+    {
+      "games": 20,
+      "timeMs": 600,
+      "maxPlies": 80,
+      "target": 1,
+      "startSeed": 52001,
+      "bundled": true,
+      "bookWidth": 50,
+      "opening": "long-pro with seeded White first pair; engines choose restricted Black second move; colors swapped per seed",
+      "illegalPolicy": "fallback",
+      "currentWins": 12,
+      "referenceWins": 8,
+      "draws": 0,
+      "illegalMoveForfeits": 0,
+      "results": [
+        {
+          "seed": 52001,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 18,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              129
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 52001,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 16,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              129
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 52098,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 34,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              111
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 52098,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 22,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              111
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 52195,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 25,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              96,
+              113
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 52195,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 16,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              96,
+              113
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 52292,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 19,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              82,
+              142
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 52292,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 29,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              82,
+              142
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 52389,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 19,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              114,
+              143
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 52389,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 34,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              114,
+              143
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 52486,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 19,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              82,
+              142
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 52486,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 27,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              82,
+              142
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 52583,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 20,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              113,
+              142
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 52583,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 32,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              113,
+              142
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 52680,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 21,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              82,
+              95
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 52680,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 20,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              82,
+              95
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 52777,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 20,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              113,
+              142
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 52777,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 27,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              113,
+              142
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 52874,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 17,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              110,
+              127
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 52874,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 27,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              110,
+              127
+            ],
+            "ko": null
+          }
+        }
+      ],
+      "id": "final-prior",
+      "phase": "validation",
+      "referenceCommit": "01e8a226317dbac8d69ec1331de9e9cbb4b167ab",
+      "sourceStage": "q2",
+      "moveGeneration": {
+        "callsPerRound": 400,
+        "identicalOutputs": true,
+        "rounds": 5,
+        "bundled": true,
+        "currentMs": 25.098086000000023,
+        "referenceMs": 23.059222999999974,
+        "speedup": 0.9187642037723496
+      },
+      "uniqueInitialBoards": 8,
+      "currentWinsByColor": {
+        "1": 6,
+        "2": 6
+      },
+      "repairsByEngine": {
+        "current": 0,
+        "reference": 0
+      }
+    },
+    {
+      "games": 20,
+      "timeMs": 600,
+      "maxPlies": 80,
+      "target": 1,
+      "startSeed": 56001,
+      "bundled": true,
+      "bookWidth": 50,
+      "opening": "long-pro with seeded White first pair; engines choose restricted Black second move; colors swapped per seed",
+      "illegalPolicy": "fallback",
+      "currentWins": 16,
+      "referenceWins": 4,
+      "draws": 0,
+      "illegalMoveForfeits": 0,
+      "results": [
+        {
+          "seed": 56001,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 13,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              142
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 56001,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 24,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              142
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 56098,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 17,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              84,
+              126
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 56098,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 32,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              84,
+              126
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 56195,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 17,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              128
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 56195,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 28,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              128
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 56292,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 19,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              110,
+              127
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 56292,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 20,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              110,
+              127
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 56389,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 29,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              111
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 56389,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 12,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              111
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 56486,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 22,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              97,
+              126
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 56486,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 14,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              97,
+              126
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 56583,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 50,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 6,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 6
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              110,
+              114
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 56583,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 24,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              110,
+              114
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 56680,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 21,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              126
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 56680,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 14,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              126
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 56777,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 22,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              111
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 56777,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 20,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              98,
+              111
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 56874,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 20,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              128
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 56874,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 34,
+          "scores": {
+            "black": 0,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              128
+            ],
+            "ko": null
+          }
+        }
+      ],
+      "id": "final-original",
+      "phase": "validation",
+      "referenceCommit": "e25e99bb3285c34c0c8dc885f0e2a0aae674a752",
+      "sourceStage": "q2",
+      "moveGeneration": {
+        "callsPerRound": 400,
+        "identicalOutputs": true,
+        "rounds": 5,
+        "bundled": true,
+        "currentMs": 23.035519000000022,
+        "referenceMs": 207.523187,
+        "speedup": 9.008834877998616
+      },
+      "uniqueInitialBoards": 9,
+      "currentWinsByColor": {
+        "1": 6,
+        "2": 10
+      },
+      "repairsByEngine": {
+        "current": 0,
+        "reference": 6
+      }
+    },
+    {
+      "games": 4,
+      "timeMs": 600,
+      "maxPlies": 120,
+      "target": 3,
+      "startSeed": 59001,
+      "bundled": true,
+      "bookWidth": 50,
+      "opening": "long-pro with seeded White first pair; engines choose restricted Black second move; colors swapped per seed",
+      "illegalPolicy": "fallback",
+      "currentWins": 1,
+      "referenceWins": 3,
+      "draws": 0,
+      "illegalMoveForfeits": 0,
+      "results": [
+        {
+          "seed": 59001,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 64,
+          "scores": {
+            "black": 1,
+            "white": 3
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              84,
+              126
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 59001,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 37,
+          "scores": {
+            "black": 3,
+            "white": 1
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              84,
+              126
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 59098,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 48,
+          "scores": {
+            "black": 0,
+            "white": 3
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              113
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 59098,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 46,
+          "scores": {
+            "black": 1,
+            "white": 3
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              113
+            ],
+            "ko": null
+          }
+        }
+      ],
+      "id": "final-multipoint",
+      "phase": "rejected-validation",
+      "referenceCommit": "01e8a226317dbac8d69ec1331de9e9cbb4b167ab",
+      "sourceStage": "q2",
+      "notes": "Two-ply continuation for all targets was rejected for multi-point play after this suite and replay diagnostics.",
+      "moveGeneration": {
+        "callsPerRound": 400,
+        "identicalOutputs": true,
+        "rounds": 5,
+        "bundled": true,
+        "currentMs": 23.317939000000024,
+        "referenceMs": 21.27040999999997,
+        "speedup": 0.9121908244120523
+      },
+      "uniqueInitialBoards": 2,
+      "currentWinsByColor": {
+        "1": 0,
+        "2": 1
+      },
+      "repairsByEngine": {
+        "current": 0,
+        "reference": 0
+      }
+    },
+    {
+      "games": 2,
+      "timeMs": 5000,
+      "maxPlies": 80,
+      "target": 1,
+      "startSeed": 101,
+      "bundled": true,
+      "opening": "long-pro from forced center; both engines choose all subsequent moves; identical start per pair",
+      "illegalPolicy": "fallback",
+      "currentWins": 1,
+      "referenceWins": 1,
+      "draws": 0,
+      "illegalMoveForfeits": 0,
+      "results": [
+        {
+          "seed": 101,
+          "currentColor": 1,
+          "winner": "current",
+          "reason": "score",
+          "plies": 32,
+          "scores": {
+            "black": 2,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [],
+            "ko": null
+          }
+        },
+        {
+          "seed": 101,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 24,
+          "scores": {
+            "black": 1,
+            "white": 0
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [],
+            "ko": null
+          }
+        }
+      ],
+      "id": "final-full",
+      "phase": "validation",
+      "referenceCommit": "01e8a226317dbac8d69ec1331de9e9cbb4b167ab",
+      "sourceStage": "q2",
+      "moveGeneration": {
+        "callsPerRound": 400,
+        "identicalOutputs": true,
+        "rounds": 5,
+        "bundled": true,
+        "currentMs": 15.18045600000005,
+        "referenceMs": 13.011943999999971,
+        "speedup": 0.8571510631828141
+      },
+      "uniqueInitialBoards": 1,
+      "currentWinsByColor": {
+        "1": 1,
+        "2": 0
+      },
+      "repairsByEngine": {
+        "current": 0,
+        "reference": 0
+      }
+    },
+    {
+      "games": 4,
+      "timeMs": 600,
+      "maxPlies": 120,
+      "target": 3,
+      "startSeed": 59001,
+      "bundled": true,
+      "bookWidth": 50,
+      "opening": "long-pro with seeded White first pair; engines choose restricted Black second move; colors swapped per seed",
+      "illegalPolicy": "fallback",
+      "currentWins": 1,
+      "referenceWins": 3,
+      "draws": 0,
+      "illegalMoveForfeits": 0,
+      "results": [
+        {
+          "seed": 59001,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 62,
+          "scores": {
+            "black": 2,
+            "white": 3
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              84,
+              126
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 59001,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 46,
+          "scores": {
+            "black": 2,
+            "white": 3
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              84,
+              126
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 59098,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 60,
+          "scores": {
+            "black": 2,
+            "white": 4
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              113
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 59098,
+          "currentColor": 2,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 33,
+          "scores": {
+            "black": 3,
+            "white": 2
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              111,
+              113
+            ],
+            "ko": null
+          }
+        }
+      ],
+      "id": "final-multipoint-scoped-dev",
+      "phase": "development",
+      "referenceCommit": "01e8a226317dbac8d69ec1331de9e9cbb4b167ab",
+      "sourceStage": "scoped",
+      "moveGeneration": {
+        "callsPerRound": 400,
+        "identicalOutputs": true,
+        "rounds": 5,
+        "bundled": true,
+        "currentMs": 22.88901400000003,
+        "referenceMs": 19.531232999999986,
+        "speedup": 0.8533016319532138
+      },
+      "uniqueInitialBoards": 2,
+      "currentWinsByColor": {
+        "1": 0,
+        "2": 1
+      },
+      "repairsByEngine": {
+        "current": 0,
+        "reference": 0
+      }
+    },
+    {
+      "games": 4,
+      "timeMs": 600,
+      "maxPlies": 120,
+      "target": 3,
+      "startSeed": 63001,
+      "bundled": true,
+      "bookWidth": 50,
+      "opening": "long-pro with seeded White first pair; engines choose restricted Black second move; colors swapped per seed",
+      "illegalPolicy": "fallback",
+      "currentWins": 2,
+      "referenceWins": 2,
+      "draws": 0,
+      "illegalMoveForfeits": 0,
+      "results": [
+        {
+          "seed": 63001,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 38,
+          "scores": {
+            "black": 2,
+            "white": 3
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              127,
+              140
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 63001,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 48,
+          "scores": {
+            "black": 2,
+            "white": 3
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              127,
+              140
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 63098,
+          "currentColor": 1,
+          "winner": "reference",
+          "reason": "score",
+          "plies": 58,
+          "scores": {
+            "black": 1,
+            "white": 3
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              128
+            ],
+            "ko": null
+          }
+        },
+        {
+          "seed": 63098,
+          "currentColor": 2,
+          "winner": "current",
+          "reason": "score",
+          "plies": 40,
+          "scores": {
+            "black": 1,
+            "white": 3
+          },
+          "repairedMoves": 0,
+          "repairedByEngine": {
+            "current": 0,
+            "reference": 0
+          },
+          "initial": {
+            "black": [
+              112
+            ],
+            "white": [
+              80,
+              128
+            ],
+            "ko": null
+          }
+        }
+      ],
+      "id": "final-multipoint-scoped",
+      "phase": "validation",
+      "referenceCommit": "01e8a226317dbac8d69ec1331de9e9cbb4b167ab",
+      "sourceStage": "scoped",
+      "moveGeneration": {
+        "callsPerRound": 400,
+        "identicalOutputs": true,
+        "rounds": 5,
+        "bundled": true,
+        "currentMs": 21.633689000000004,
+        "referenceMs": 20.48762499999998,
+        "speedup": 0.9470241067069041
+      },
+      "uniqueInitialBoards": 2,
+      "currentWinsByColor": {
+        "1": 0,
+        "2": 2
+      },
+      "repairsByEngine": {
+        "current": 0,
+        "reference": 0
+      }
+    }
+  ]
+}

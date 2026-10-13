@@ -29,6 +29,22 @@ test('quiescence horizon recognizes a two-line match win', () => {
   }
 });
 
+test('multi-point quiescence preserves a five-ply forcing win without the one-point prover', () => {
+  // Replay the position after White's rift in the 59001 validation game.
+  // A two-ply tactical frontier evaluates Black as losing instead of seeing
+  // the forced final point. Multi-point games do not run the separate prover.
+  const b = createBoard();
+  for (const p of [50,66,82,95,97,99,110,112,124,129,141,154,175,114]) placeStone(b,p,1);
+  for (const p of [81,94,96,111,125,126,127,128,130,140,142,143,144,155,156,159,168,182]) placeStone(b,p,2);
+  makeMove(b,{action:'rift',pos:114},2);
+  const before = cloneBoard(b);
+  const result = alphaBetaWindowed(b,1,0,-CONFIG.INFINITY,CONFIG.INFINITY,
+    5000,new TranspositionTable(4096),null,null,null,null,null,{black:2,white:1},3);
+  assert.equal(result.completed,true);
+  assert.equal(result.score,CONFIG.WIN_SCORE-5);
+  assert.deepEqual(b,before);
+});
+
 test('two-line match threats trigger complete immediate defenses', () => {
   const b = crossingFours(2);
   const before = cloneBoard(b);
@@ -114,5 +130,8 @@ test('multi-point defenses equal exhaustive legal replies after scoring clears',
     }
   }
   assert.deepEqual(new Set(generateImmediateResponses(b,1,{scores:{black:0,white:0},scoreToWin:2}).map(m => key(m.move))), expected);
+  const first = generateImmediateResponses(b,1,{scores:{black:0,white:0},scoreToWin:2},true);
+  assert.equal(first.length, Math.min(1, expected.size));
+  if (first.length) assert.ok(expected.has(key(first[0].move)));
   assert.deepEqual(b, before);
 });

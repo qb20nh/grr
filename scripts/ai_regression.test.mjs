@@ -112,6 +112,9 @@ test('immediate responses match exhaustive legal-move defenses, including inters
       }
     }
     assert.deepEqual(new Set(generateImmediateResponses(b, 1).map(m => key(m.move))), expected);
+    const first = generateImmediateResponses(b, 1, undefined, true);
+    assert.equal(first.length, Math.min(1, expected.size));
+    if (first.length) assert.ok(expected.has(key(first[0].move)));
     assert.deepEqual(b, before);
   }
 });
@@ -384,15 +387,21 @@ test('a loss among the first root candidates widens the search instead of giving
   assert.equal(target.action, 'reinforce');
   class DefensiveValuesTable extends TranspositionTable {
     tryGetScore(hash, depth, alpha, beta, ply) {
-      if (ply === 0) return [false, 0, null];
+      if (ply === 0) return super.tryGetScore(hash, depth, alpha, beta, ply);
       const selected = b.cells[target.pos1] === 1 && b.cells[target.pos2] === 1;
       return [true, selected ? 0 : CONFIG.WIN_SCORE - 3, null];
     }
   }
-  const result = iterativeDeepening(b, 1, 1000, 2, { tt: new DefensiveValuesTable(64), scoreToWin: 3 });
-  assert.equal(result.depth, 2);
-  assert.equal(Math.abs(result.score), 0);
-  assert.deepEqual(result.move, target);
+  for (const maxDepth of [1,2]) for (const sliced of [false,true]) {
+    clearMoveOrdering();
+    const tt = new DefensiveValuesTable(64);
+    const result = sliced
+      ? createSearchSession(b, 1, maxDepth, tt, null, null, null, null, {black:0,white:0}, 3).searchSlice(1000)
+      : iterativeDeepening(b, 1, 1000, maxDepth, {tt, scoreToWin:3});
+    assert.equal(result.depth, maxDepth);
+    assert.equal(Math.abs(result.score), 0);
+    assert.deepEqual(result.move, target);
+  }
 });
 
 test('quiescence cannot stand pat instead of answering an immediate scoring threat', () => {
@@ -410,6 +419,22 @@ test('quiescence cannot stand pat instead of answering an immediate scoring thre
   assert.equal(result.completed, true);
   assert.ok(result.score < 30000, JSON.stringify(result));
   assert.deepEqual(b, before);
+});
+
+test('the tactical horizon recognizes an unavoidable next-move loss', () => {
+  const b = board([[2,5,3],[2,5,4],[2,5,5],[2,5,6],
+    [2,9,3],[2,9,4],[2,9,5],[2,9,6],[1,7,7]]);
+  const before = cloneBoard(b);
+  assert.deepEqual(generateImmediateResponses(b,1), []);
+  const depth = CONFIG.QUIESCENCE_DEPTH;
+  try {
+    CONFIG.QUIESCENCE_DEPTH = 0;
+    const result = search(b, {depth:0});
+    assert.equal(result.score, CONFIG.LOSS_SCORE + 2);
+    assert.deepEqual(b, before);
+  } finally {
+    CONFIG.QUIESCENCE_DEPTH = depth;
+  }
 });
 
 test('short searches deepen a defensive hint instead of returning it with unused time', () => {

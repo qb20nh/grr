@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createBoard } from '../src/lib/game/ai/board.ts';
-import { scanLine, classifyLine, countPatterns } from '../src/lib/game/ai/patterns.ts';
+import { scanLine, classifyLine, countPatterns, patternAt } from '../src/lib/game/ai/patterns.ts';
 
 test('a pattern may bridge one gap, never combine stones across two gaps', () => {
   for (const offset of [1, 15, 16, 14]) {
@@ -12,6 +12,27 @@ test('a pattern may bridge one gap, never combine stones across two gaps', () =>
     assert.equal(countPatterns(b, 1).GAP_THREE, 0);
     b.cells[112 + 3 * offset] = 1;
     assert.equal(classifyLine(scanLine(b, 112, dir, 1)), 'GAP_THREE');
+  }
+});
+
+test('pattern-only scans preserve full-length lines, both colors, diagonals and Ko', () => {
+  const b = createBoard();
+  let state = 31579;
+  const random = n => {
+    state ^= state << 13; state ^= state >>> 17; state ^= state << 5;
+    return (state >>> 0) % n;
+  };
+  for (let sample = 0; sample < 80; sample++) {
+    for (let pos = 0; pos < 225; pos++) b.cells[pos] = random(3);
+    b.koPosition = random(225);
+    for (let pos = 0; pos < 225; pos++) {
+      if (!b.cells[pos]) continue;
+      for (let dir = 0; dir < 4; dir++) for (const ignoreKo of [false, true]) {
+        assert.equal(patternAt(b, pos, dir, b.cells[pos], ignoreKo),
+          classifyLine(scanLine(b, pos, dir, b.cells[pos], ignoreKo)),
+          `sample=${sample} pos=${pos} dir=${dir} ignoreKo=${ignoreKo}`);
+      }
+    }
   }
 });
 
@@ -58,6 +79,7 @@ test('line classification agrees with a run-based oracle across all nine-cell li
         b.koPosition = ko === null ? null : 105 + ko;
         for (const ignoreKo of [false, true]) {
           const actual = classifyLine(scanLine(b, 105 + start + 4, 0, 1, ignoreKo));
+          assert.equal(patternAt(b, 105 + start + 4, 0, 1, ignoreKo), actual);
           assert.equal(actual, referencePattern(line, start + 4, ignoreKo ? null : ko),
             `line=${line.join('')} origin=${start + 4} ko=${ko} ignore=${ignoreKo}`);
         }

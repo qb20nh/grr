@@ -8,12 +8,11 @@
  */
 
 import type { Board, CellIndex, Color, Move } from './types';
-import { createReinforceMove, createRiftMove, createSingleWinMove, getOpponent } from './utils';
-import { makeMove, unmakeMove, validateReinforce } from './board';
-import { scanLine, classifyLine } from './patterns';
+import { createSingleWinMove, getOpponent } from './utils';
+import { makeMove, unmakeMove } from './board';
 import { getSingleStoneWinningSquares, hasImmediateThreatAfterMove } from './threats';
 import { withTurn } from './zobrist';
-import { getCandidatePositions, scoreCandidates, generateAllMoves } from './moveGen';
+import { generateImmediateResponses, generateAllMoves } from './moveGen';
 import { decodeMove, encodeMove, MOVE_CODE_NONE } from './moveCodec';
 
 type TssStatus = 'proven_win' | 'not_proven' | 'timeout';
@@ -53,24 +52,6 @@ const MOVE_NONE = MOVE_CODE_NONE;
 const ROOT_CACHE_MAX = 20000;
 const rootCache = new Map<bigint, MemoEntry>();
 
-// Prefer sensible filler squares near the main action when a defender must play a forced block
-// and the second stone is otherwise unconstrained. This prevents “corner garbage” placements.
-const CENTER_FIRST: readonly CellIndex[] = (() => {
-  const out: CellIndex[] = Array.from({ length: 225 }, (_, i) => i);
-  const center = 7;
-  out.sort((a, b) => {
-    const ar = Math.floor(a / 15);
-    const ac = a % 15;
-    const br = Math.floor(b / 15);
-    const bc = b % 15;
-    const da = Math.abs(ar - center) + Math.abs(ac - center);
-    const db = Math.abs(br - center) + Math.abs(bc - center);
-    if (da !== db) return da - db;
-    return a - b;
-  });
-  return out;
-})();
-
 function memoKey(board: Board, attacker: Color, toMove: Color, pliesLeft: number): bigint {
   // Include turn + attacker + remaining depth.
   // We keep it as BigInt for cheap hashing without string allocations.
@@ -82,11 +63,10 @@ function memoKey(board: Board, attacker: Color, toMove: Color, pliesLeft: number
 
 function rootKey(board: Board, attacker: Color, toMove: Color, options: TssOptions): bigint {
   let key = withTurn(board.hash, toMove);
-  key = (key << 6n) ^ BigInt(options.maxPlies & 0x3f);
-  key = (key << 6n) ^ BigInt(options.maxAttackerMoves & 0x3f);
-  key = (key << 6n) ^ BigInt(options.maxDefenderMoves & 0x3f);
-  key = (key << 2n) ^ BigInt(attacker);
-  return key;
+  key = (key << 32n) | BigInt(options.maxPlies >>> 0);
+  key = (key << 32n) | BigInt(options.maxAttackerMoves >>> 0);
+  key = (key << 32n) | BigInt(options.maxDefenderMoves >>> 0);
+  return (key << 2n) | BigInt(attacker);
 }
 
 /**
@@ -159,89 +139,12 @@ function generateForcingAttackerMoves(board: Board, attacker: Color, limit: numb
 }
 
 function generateDefenderReplies(
-  board: Board,
-  attacker: Color,
-  defender: Color,
-  threatSquares: CellIndex[],
-  limit: number
+  board: Board, defender: Color, limit: number
 ): { replies: Move[]; complete: boolean } {
-  const replies: Move[] = [];
-  const threatSet = new Set<CellIndex>(threatSquares);
-
-  // 1) Reinforce replies: occupy ALL current immediate win squares.
-  // - If there are 2+ threat squares, defender must cover them all (or lose immediately).
-  // - If there is exactly 1 threat square, defender must place there, but can choose any
-  //   legal second stone; enumerate all legal pairings (bounded by `limit`).
-  if (threatSquares.length === 2) {
-    const a = threatSquares[0];
-    const b = threatSquares[1];
-    if (validateReinforce(board, a, b, defender)) {
-      replies.push(createReinforceMove(a, b));
-    }
-  } else if (threatSquares.length === 1) {
-    const block = threatSquares[0];
-    // Try good local fillers first (near existing stones), then fall back to a center-first sweep.
-    const preferred = scoreCandidates(board, getCandidatePositions(board), defender)
-      .slice(0, 32)
-      .map(s => s.pos);
-
-    const seen = new Set<CellIndex>();
-    for (const f of preferred) {
-      if (f === block) continue;
-      if (seen.has(f)) continue;
-      seen.add(f);
-      if (!validateReinforce(board, block, f, defender)) continue;
-      replies.push(createReinforceMove(block, f));
-      if (replies.length >= limit) return { replies, complete: false };
-    }
-
-    for (const f of CENTER_FIRST) {
-      if (f === block) continue;
-      if (seen.has(f)) continue;
-      seen.add(f);
-      if (!validateReinforce(board, block, f, defender)) continue;
-      replies.push(createReinforceMove(block, f));
-      if (replies.length >= limit) return { replies, complete: false };
-    }
-  }
-
-  // 2) Rift replies: remove attacker stones that participate in the immediate-win patterns
-  // that create these threat squares. This is complete for the “single-stone win square” model.
-  const riftCandidates = new Set<CellIndex>();
-  for (let pos = 0; pos < 225; pos++) {
-    if (board.cells[pos] !== attacker) continue;
-
-    for (let dir = 0; dir < 4; dir++) {
-      // Threat squares are computed with Ko ignored (attacker moves after Ko clears/changes),
-      // so pattern detection here must also treat Ko as open.
-      const info = scanLine(board, pos, dir, attacker, true);
-      const pattern = classifyLine(info);
-
-      let hits = false;
-      if (pattern === 'OPEN_FOUR' || pattern === 'HALF_FOUR') {
-        if (info.extendCount >= 1 && threatSet.has(info.extend1)) hits = true;
-        else if (info.extendCount >= 2 && threatSet.has(info.extend2)) hits = true;
-      } else if (pattern === 'GAP_FOUR') {
-        if (info.gaps === 1 && threatSet.has(info.gapPos)) hits = true;
-      } else {
-        continue;
-      }
-
-      if (hits) {
-        riftCandidates.add(pos);
-        break;
-      }
-    }
-  }
-
-  for (const pos of riftCandidates) {
-    replies.push(createRiftMove(pos));
-    if (replies.length >= limit) {
-      return { replies, complete: false };
-    }
-  }
-
-  return { replies, complete: true };
+  // Share the exact evasion generator, including remote fillers and safe rifts.
+  const defenses = generateImmediateResponses(board, defender);
+  if (defenses === null) return {replies:[], complete:false};
+  return {replies:defenses.slice(0, limit).map(m => m.move), complete:defenses.length <= limit};
 }
 
 /**
@@ -369,12 +272,13 @@ export function threatSpaceSearch(
 
     const { replies, complete } = generateDefenderReplies(
       board,
-      attacker,
       currentToMove,
-      attackerThreatSquares,
       options.maxDefenderMoves
     );
 
+    if (replies.length === 0 && !complete) {
+      return {status:'not_proven', move:null, pv:[], nodes};
+    }
     if (replies.length === 0) {
       // Defender cannot eliminate the immediate win threats => forced win for attacker.
       memo.set(key, { status: 'proven_win', bestMoveCode: MOVE_NONE });

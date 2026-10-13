@@ -8,7 +8,7 @@ import type { Board, CellIndex, Color, Fork, PatternCounts, Move, ReinforceMove,
 import { ThreatLevel, EMPTY } from './types';
 import { getOpponent, createSingleWinMove, createReinforceMove } from './utils';
 import { checkWinAt, checkColinearityConstraint } from './board';
-import { countPatterns, scanLine, classifyLine, FORWARD_STEPS, BACKWARD_STEPS, LINE_OFFSETS } from './patterns';
+import { countPatterns, scanLine, classifyLine, patternAt, FORWARD_STEPS, BACKWARD_STEPS, LINE_OFFSETS } from './patterns';
 
 // ---- Blocking mask (scratch) ----
 export interface BlockingMask {
@@ -187,8 +187,7 @@ export function detectForks(board: Board, player: Color): Fork[] {
     const threats: string[] = [];
     
     for (let dir = 0; dir < 4; dir++) {
-      const info = scanLine(board, pos, dir, player);
-      const pattern = classifyLine(info);
+      const pattern = patternAt(board, pos, dir, player);
       
       // Count significant threats
       if (pattern === 'FIVE' ||

@@ -154,6 +154,7 @@ default 12 candidates; record this setting when comparing results. The older
 `long-pro` mode seeds all three opening plies and is only an additional position
 suite. `quiet` supplies standard-rule midgame starts. Seeded starts are not
 certified balanced. These time-limited Node matches are not an Elo estimate or a browser
-worker/pondering benchmark. See [the latest search follow-up](docs/ai-strength-followup.md)
-and [earlier strength validation](docs/ai-strength-validation.md)
+worker/pondering benchmark. See [the latest search allocation results](docs/ai-strength-round3.md),
+[the previous follow-up](docs/ai-strength-followup.md), and
+[earlier strength validation](docs/ai-strength-validation.md)
 for measurements and limitations.

@@ -1,5 +1,8 @@
 # AI search follow-up
 
+Archived measurements for `01e8a226317dbac8d69ec1331de9e9cbb4b167ab`.
+See [the next round](ai-strength-round3.md) for subsequent changes and measurements.
+
 This continues the work in `fdbbfddefb2771894c68d2f19a9ece9f637add70`, merged by
 PR #1 as `d8695812b6a407086ada0bcba8bef929b4a5428c` (identical source tree).
 Measurements use bundled Node v24.19.0 on 2026-10-12 UTC / 2026-10-13 Korea time.

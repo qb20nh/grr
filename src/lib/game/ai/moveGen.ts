@@ -22,11 +22,12 @@ export interface MatchContext {
  * Complete replies to an immediate match-ending threat. A heuristic top-K list
  * is unsafe here: attractive attacks can crowd out every legal defensive rift.
  * null means ordinary move generation is needed; [] means no evasion exists.
+ * `firstOnly` answers existence at a tactical horizon without scoring all replies.
  */
-export function generateImmediateResponses(board: Board, player: Color, match?: MatchContext): ScoredMove[] | null {
+export function generateImmediateResponses(board: Board, player: Color, match?: MatchContext, firstOnly = false): ScoredMove[] | null {
   const target = match?.scoreToWin ?? 1;
   if (target === 0) return null;
-  if (target > 1) return generateMultiPointResponses(board, player, match!);
+  if (target > 1) return generateMultiPointResponses(board, player, match!, firstOnly);
   const ownScore = player === BLACK ? match?.scores.black ?? 0 : match?.scores.white ?? 0;
   const opponent = getOpponent(player);
   const opponentScore = opponent === BLACK ? match?.scores.black ?? 0 : match?.scores.white ?? 0;
@@ -43,17 +44,21 @@ export function generateImmediateResponses(board: Board, player: Color, match?: 
   if (threats.length === 0) return null;
 
   const responses: ScoredMove[] = [];
-  const scorer = createReinforceScorer(board, player, getBlockingMask(board, player));
+  const scorer = firstOnly ? null : createReinforceScorer(board, player, getBlockingMask(board, player));
   const addPair = (a: number, b: number): void => {
     if (!validateReinforce(board, a, b, player)) return;
-    const score = scorer.pair(a, b);
+    const score = scorer?.pair(a, b) ?? 0;
     responses.push({ move: createReinforceMove(a, b), score, orderScore: score });
   };
   if (threats.length === 1) {
     // Every legal filler matters: remote second stones can create a counterthreat.
-    for (let pos = 0; pos < BOARD_CELLS; pos++) addPair(threats[0], pos);
+    for (let pos = 0; pos < BOARD_CELLS; pos++) {
+      addPair(threats[0], pos);
+      if (firstOnly && responses.length) return responses;
+    }
   } else if (threats.length === 2) {
     addPair(threats[0], threats[1]);
+    if (firstOnly && responses.length) return responses;
   }
 
   // Inspect every opposing stone, including low-ranked targets. Removing one
@@ -66,14 +71,15 @@ export function generateImmediateResponses(board: Board, player: Color, match?: 
       findWinningPositions(board, opponent).length === 0;
     unmakeMove(board, undo, player);
     if (!safe) continue;
-    const score = evaluateRiftTarget(board, pos, player);
+    const score = firstOnly ? 0 : evaluateRiftTarget(board, pos, player);
     responses.push({ move, score, orderScore: score });
+    if (firstOnly) return responses;
   }
   responses.sort((a, b) => b.score - a.score);
   return responses;
 }
 
-function generateMultiPointResponses(board: Board, player: Color, match: MatchContext): ScoredMove[] | null {
+function generateMultiPointResponses(board: Board, player: Color, match: MatchContext, firstOnly: boolean): ScoredMove[] | null {
   const ownScore = player === BLACK ? match.scores.black : match.scores.white;
   const opponent = getOpponent(player);
   const opponentScore = opponent === BLACK ? match.scores.black : match.scores.white;
@@ -86,7 +92,7 @@ function generateMultiPointResponses(board: Board, player: Color, match: MatchCo
   if (!threat) return null;
 
   const responses: ScoredMove[] = [];
-  const scorer = createReinforceScorer(board, player, getBlockingMask(board, player));
+  const scorer = firstOnly ? null : createReinforceScorer(board, player, getBlockingMask(board, player));
   const seen = new Set<number>();
   // A non-scoring placement must occupy at least one square of this winning
   // move. Enumerate every legal filler, then check all remaining winning moves.
@@ -101,8 +107,9 @@ function generateMultiPointResponses(board: Board, player: Color, match: MatchCo
       const safe = getImmediateMatchWinningMove(board, opponent, match.scoreToWin - opponentScore) === null;
       unmakeMove(board, undo, player);
       if (!safe) continue;
-      const score = scorer.pair(a, b);
+      const score = scorer?.pair(a, b) ?? 0;
       responses.push({move, score, orderScore:score});
+      if (firstOnly) return responses;
     }
   }
   for (let pos = 0; pos < BOARD_CELLS; pos++) {
@@ -113,8 +120,9 @@ function generateMultiPointResponses(board: Board, player: Color, match: MatchCo
     const scoring = applyScoringAndClear(after, move, player);
     const remaining = match.scoreToWin - opponentScore - scoring.points;
     if (remaining <= 0 || getImmediateMatchWinningMove(after, opponent, remaining)) continue;
-    const score = evaluateRiftTarget(board, pos, player);
+    const score = firstOnly ? 0 : evaluateRiftTarget(board, pos, player);
     responses.push({move, score, orderScore:score});
+    if (firstOnly) return responses;
   }
   responses.sort((a,b) => b.score - a.score);
   return responses;

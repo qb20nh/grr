@@ -78,6 +78,48 @@ function rankFor(count: number, openEnds: number, gaps: number): number {
   return 0;
 }
 
+const PATTERN_BY_RANK: readonly (PatternType | null)[] = [
+  null, 'HALF_TWO', 'OPEN_TWO', 'HALF_THREE', 'GAP_THREE',
+  'OPEN_THREE', 'HALF_FOUR', 'GAP_FOUR', 'OPEN_FOUR', 'FIVE',
+] as (PatternType | null)[];
+
+/** Pattern-only scan for move scoring and forks, without allocating LineInfo. */
+export function patternAt(
+  board: Board, pos: CellIndex, dir: number, player: Color, ignoreKo = false
+): PatternType | null {
+  const geometry = pos * 4 + dir;
+  const forward = FORWARD_STEPS[geometry], backward = BACKWARD_STEPS[geometry];
+  if (1 + forward + backward < 5) return null;
+  const offset = LINE_OFFSETS[dir], cells = board.cells;
+  const ko = ignoreKo ? -1 : board.koPosition;
+  let left = 0, right = 0;
+  while (left < backward && left < 6 && cells[pos - (left + 1) * offset] === player) left++;
+  while (right < forward && right < 6 && cells[pos + (right + 1) * offset] === player) right++;
+  const count = left + 1 + right;
+  if (count >= 5) return count === 5 ? PATTERN_BY_RANK[9] : null;
+  const leftEnd = pos - (left + 1) * offset, rightEnd = pos + (right + 1) * offset;
+  const leftOpen = left < backward && cells[leftEnd] === EMPTY && leftEnd !== ko;
+  const rightOpen = right < forward && cells[rightEnd] === EMPTY && rightEnd !== ko;
+  let rank = rankFor(count, Number(leftOpen) + Number(rightOpen), 0);
+  if (rightOpen) {
+    let after = 0;
+    const remaining = forward - right - 1;
+    let end = rightEnd + offset;
+    while (after < remaining && after < 6 && cells[end] === player) { after++; end += offset; }
+    if (after) rank = Math.max(rank, rankFor(count + after,
+      Number(leftOpen) + Number(after < remaining && cells[end] === EMPTY && end !== ko), 1));
+  }
+  if (leftOpen) {
+    let after = 0;
+    const remaining = backward - left - 1;
+    let end = leftEnd - offset;
+    while (after < remaining && after < 6 && cells[end] === player) { after++; end -= offset; }
+    if (after) rank = Math.max(rank, rankFor(count + after,
+      Number(rightOpen) + Number(after < remaining && cells[end] === EMPTY && end !== ko), 1));
+  }
+  return PATTERN_BY_RANK[rank];
+}
+
 /**
  * Scan a line from a position in both directions
  */

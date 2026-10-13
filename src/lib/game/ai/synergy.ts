@@ -7,7 +7,7 @@ import { BOARD_SIZE, BOARD_CELLS, SYNERGY_BONUS, DIRECTIONS } from './constants'
 import type { Board, CellIndex, Color } from './types';
 import { EMPTY } from './types';
 import { manhattanDistance, getOpponent, areColinear, toIndex, inBounds } from './utils';
-import { scanLine, classifyLine } from './patterns';
+import { scanLine, patternAt } from './patterns';
 import { getBlockingMask } from './threats';
 import type { BlockingMask } from './threats';
 
@@ -123,8 +123,7 @@ export function createsWinningThreat(
   
   let creates = false;
   for (let dir = 0; dir < 4; dir++) {
-    const info = scanLine(board, pos, dir, player);
-    const pattern = classifyLine(info);
+    const pattern = patternAt(board, pos, dir, player);
     if (pattern === 'FIVE' || pattern === 'OPEN_FOUR') {
       creates = true;
       break;
@@ -208,8 +207,7 @@ function countThreatsAtPosition(
   let threats = 0;
   
   for (let dir = 0; dir < 4; dir++) {
-    const info = scanLine(board, pos, dir, player);
-    const pattern = classifyLine(info);
+    const pattern = patternAt(board, pos, dir, player);
     
     if (pattern === 'FIVE' ||
         pattern === 'OPEN_FOUR' ||
@@ -251,8 +249,7 @@ function analyzePlacement(
   
   // Score based on patterns created
   for (let dir = 0; dir < 4; dir++) {
-    const info = scanLine(board, pos, dir, player);
-    const pattern = classifyLine(info);
+    const pattern = patternAt(board, pos, dir, player);
 
     if (pattern === 'FIVE' || pattern === 'OPEN_FOUR') attacks = true;
     if (pattern === 'FIVE') wins = true;
@@ -298,8 +295,7 @@ function analyzePlacement(
     // Evaluate what we're blocking
     board.cells[pos] = opponent;
     for (let dir = 0; dir < 4; dir++) {
-      const info = scanLine(board, pos, dir, opponent);
-      const pattern = classifyLine(info);
+      const pattern = patternAt(board, pos, dir, opponent);
       
       switch (pattern) {
         case 'FIVE':
