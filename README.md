@@ -118,8 +118,8 @@ pnpm check
 pnpm build
 ```
 
-`test:ai` covers exact-five/overline and one-gap pattern detection, ko, legal
-pair-scoring equivalence, bounded tactical search, PVS bounds, opening-filter
+`test:ai` covers exact-five/overline and one-gap pattern detection, ko, single-stone
+scoring for human and AI turns, legal pair evaluation, bounded tactical search, PVS bounds, opening-filter
 cache isolation, root pruning and fallback values, Ultra result selection,
 concurrent shared-TT writers, and the optional NNUE accumulator, followed by the
 tactical puzzles. The application worker protocol is also exercised under Node.
@@ -167,4 +167,6 @@ worker/pondering benchmark. See [the latest throughput and isolated match result
 [the search allocation results](docs/ai-strength-round3.md),
 [the previous follow-up](docs/ai-strength-followup.md), and
 [earlier strength validation](docs/ai-strength-validation.md)
-for measurements and limitations.
+for measurements and limitations. These archived measurements predate the fix
+that requires scoring reinforces to place exactly one stone; they do not establish
+performance or strength for the corrected rules.

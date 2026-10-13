@@ -4,10 +4,10 @@
  */
 
 import { BOARD_CELLS, CANDIDATE_NEIGHBORS } from './constants';
-import type { Board, CellIndex, Color, Fork, PatternCounts, Move, ReinforceMove, SingleWinMove } from './types';
+import type { Board, CellIndex, Color, Fork, PatternCounts, Move, SingleWinMove } from './types';
 import { ThreatLevel, EMPTY } from './types';
-import { getOpponent, createSingleWinMove, createReinforceMove } from './utils';
-import { checkWinAt, checkColinearityConstraint } from './board';
+import { getOpponent, createSingleWinMove } from './utils';
+import { checkWinAt } from './board';
 import { countPatterns, scanLine, classifyLine, patternAt, FORWARD_STEPS, BACKWARD_STEPS, LINE_OFFSETS } from './patterns';
 
 // ---- Blocking mask (scratch) ----
@@ -341,16 +341,16 @@ export function hasImmediateThreatAfterMove(
   return getSingleStoneWinningSquares(board, player, 'ignoreKo', placed).length > 0;
 }
 
-/** Exact match-ending placement, including intersecting lines and scoring pairs. */
+/** Exact match-ending single placement, including intersecting scoring lines. */
 export function getImmediateMatchWinningMove(
   board: Board, player: Color, pointsNeeded: number, koMode: ThreatKoMode = 'respectKo'
-): ReinforceMove | SingleWinMove | null {
-  // Each of two legal stones can complete at most four distinct lines.
-  if (pointsNeeded > 8) return null;
+): SingleWinMove | null {
+  // A scoring reinforce has one stone, completing at most four distinct lines.
+  if (pointsNeeded > 4) return null;
   const squares = getSingleStoneWinningSquares(board, player, koMode);
   if (squares.length === 0) return null;
   if (pointsNeeded <= 1) return createSingleWinMove(squares[0]);
-  const points = squares.map(pos => {
+  for (const pos of squares) {
     let count = 0;
     for (let dir = 0; dir < 4; dir++) {
       const geometry = pos * 4 + dir, offset = LINE_OFFSETS[dir];
@@ -359,17 +359,7 @@ export function getImmediateMatchWinningMove(
       for (let step = 1; step <= BACKWARD_STEPS[geometry] && board.cells[pos - step * offset] === player; step++) length++;
       if (length === 5) count++;
     }
-    return count;
-  });
-  for (let i = 0; i < squares.length; i++) {
-    if (points[i] >= pointsNeeded) return createSingleWinMove(squares[i]);
-  }
-  // The collinearity rule keeps legal pair placements' scoring lines independent.
-  for (let i = 0; i < squares.length; i++) for (let j = i + 1; j < squares.length; j++) {
-    if (points[i] + points[j] >= pointsNeeded &&
-        checkColinearityConstraint(board, squares[i], squares[j], player)) {
-      return createReinforceMove(squares[i], squares[j]);
-    }
+    if (count >= pointsNeeded) return createSingleWinMove(pos);
   }
   return null;
 }

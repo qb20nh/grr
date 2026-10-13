@@ -182,6 +182,14 @@ function generateFallbackRootMoves(
 
   const out: ScoredMove[] = [];
 
+  // Filters can exclude the limited scoring-single list from normal generation.
+  for (const pos of getSingleStoneWinningSquares(board, player)) {
+    const move = createSingleWinMove(pos);
+    if (!filter(move)) continue;
+    const score = scorer.single(pos) + 120000;
+    out.push({ move, score, orderScore: score });
+  }
+
   // 1) Reinforce moves: generate legal pairs from the full empty set so that opening filters
   // can still find legal options even when the normal candidate generator is too local.
   for (let i = 0; i < empties.length; i++) {
@@ -1407,8 +1415,7 @@ export function findBestMove(
     if (scoreToWin === 0) return false;
     const sideScore = side === BLACK ? quickCtx.scoreBlack : quickCtx.scoreWhite;
     if (filter === null && sideScore + 1 >= scoreToWin) {
-      // Legal pair placements cannot extend each other's line without an enemy
-      // shield between them. Any scoring pair therefore has a scoring single.
+      // Only a single-stone reinforce can score for its mover.
       // A rift only awards points to the removed color, never to its mover.
       return getSingleStoneWinningSquares(board, side).length > 0;
     }

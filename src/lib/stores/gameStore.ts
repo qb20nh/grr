@@ -2,7 +2,7 @@ import { writable, derived, get } from 'svelte/store';
 import type { GameState, Position, GameMode, Action, PlayerColor, GamePhase, ScoreToWin, EndReason, OpeningPreset, MoveRecord, AiVariant } from '$lib/game/types';
 import { createInitialBoard, getOpeningFirstPlayer, BOARD_SIZE } from '$lib/game/types';
 import { flattenUniquePositions } from '$lib/game/scoredLines';
-import { wouldScoreWithSingleStone } from '$lib/game/validator';
+import { validateReinforceAction } from '$lib/game/validator';
 import { isLongProForcedCenterMove } from '$lib/game/openingRules';
 
 function getWhiteFirstReinforcePositions(moveHistory: GameState['moveHistory']): Position[] | null {
@@ -535,16 +535,14 @@ export const canConfirmMove = derived(gameStore, $state => {
   if ($state.gameMode === 'ai-vs-ai') return false;
   if ($state.gameMode === 'vs-ai' && $state.currentPlayer === $state.aiColor) return false;
   
-  // Two stones - always can confirm
-  if ($state.pendingPlacements.length === 2) return true;
-  
   // Rift - always can confirm
   if ($state.pendingRift !== null) return true;
   
-  // Single stone - only if it scores
-  if ($state.pendingPlacements.length === 1) {
-    if (isLongProForcedCenterMove($state)) return true;
-    return wouldScoreWithSingleStone($state.board, $state.pendingPlacements[0], $state.currentPlayer);
+  if ($state.pendingPlacements.length > 0) {
+    if ($state.pendingPlacements.length === 1 && isLongProForcedCenterMove($state)) return true;
+    return validateReinforceAction(
+      $state.board, $state.pendingPlacements, $state.currentPlayer, $state.lastRiftedPosition
+    ).valid;
   }
   
   return false;
