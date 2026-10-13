@@ -1,5 +1,8 @@
 # AI strength validation
 
+Archived measurements for `fdbbfddefb2771894c68d2f19a9ece9f637add70`.
+See [the follow-up](ai-strength-followup.md) for subsequent changes and measurements.
+
 Measured on 2026-10-12 UTC with Node v24.19.0. Reference engine:
 `e25e99bb3285c34c0c8dc885f0e2a0aae674a752` (the original main branch).
 The application still uses handcrafted evaluation; no trained NNUE model is

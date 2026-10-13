@@ -136,7 +136,11 @@ node --import tsx scripts/compare_ai.mjs --reference ../grr-baseline --bundle --
 node --import tsx scripts/compare_ai.mjs --reference ../grr-baseline --bundle --games 2 --time 5000 --opening long-pro-full --illegal fallback
 ```
 
-This prints JSON lines for equal-work move-generation timings and color-swapped
+For behavior-preserving optimizations, `node scripts/compare_search.mjs
+--reference ../grr-baseline --rounds 9` compares completed fixed-depth searches
+and asserts identical moves, values, depths and node counts before reporting timing.
+
+`compare_ai.mjs` prints JSON lines for equal-work move-generation timings and color-swapped
 matches from paired openings. Use `--require-identical` to assert unchanged move
 generation during a pure speed experiment. Defaults use a one-point target
 (`--target 3` tests score clearing), an 80-ply cap and
@@ -144,13 +148,23 @@ threefold-repetition adjudication. `--illegal fallback` models the application's
 legal-move replacement instead of awarding wins for illegal scoring singles;
 the default `forfeit` mode remains available for legality diagnostics.
 `--trace /tmp/grr-game` saves board states and move/search statistics for replay.
+Use `--unique-openings` to require distinct exact starting boards between pairs
+(increase `--book-width` when necessary). `--fresh-engines --bundle` starts both
+engines in a fresh worker for each game, clearing all caches including TSS. The
+summary always reports the number of distinct starting boards. Unique boards
+may still be equivalent under rotation or reflection.
 Long Pro is the primary strength benchmark. `long-pro-full` starts after the
 forced center stone; both engines choose all subsequent moves, with the app's
 opening restrictions and reply filters. It has one fixed initial position, so
 repeated pairs are not independent samples. `long-pro-book` varies White's first
-pair and lets the engines choose Black's restricted second move. The older
+pair and lets the engines choose Black's restricted second move. The
+`--book-width 50` option widens the reference-ranked White opening pool from its
+default 12 candidates; record this setting when comparing results. The older
 `long-pro` mode seeds all three opening plies and is only an additional position
 suite. `quiet` supplies standard-rule midgame starts. Seeded starts are not
 certified balanced. These time-limited Node matches are not an Elo estimate or a browser
-worker/pondering benchmark. See [strength validation](docs/ai-strength-validation.md)
+worker/pondering benchmark. See [the latest throughput and isolated match results](docs/ai-strength-round4.md),
+[the search allocation results](docs/ai-strength-round3.md),
+[the previous follow-up](docs/ai-strength-followup.md), and
+[earlier strength validation](docs/ai-strength-validation.md)
 for measurements and limitations.

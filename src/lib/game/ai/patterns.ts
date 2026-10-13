@@ -6,7 +6,6 @@
 import { BOARD_SIZE, BOARD_CELLS, DIRECTIONS } from './constants';
 import type { Board, CellIndex, Color, PatternType, PatternCounts } from './types';
 import { EMPTY } from './types';
-import { toIndex, inBounds } from './utils';
 
 /**
  * Line information from scanning in one direction
@@ -30,9 +29,9 @@ const NO_POS: CellIndex = -1;
 
 // Board geometry is immutable; avoid row/column division, bounds checks, and
 // two temporary scan objects on every pattern lookup.
-const FORWARD_STEPS = new Uint8Array(BOARD_CELLS * 4);
-const BACKWARD_STEPS = new Uint8Array(BOARD_CELLS * 4);
-const LINE_OFFSETS = DIRECTIONS.map(([dr, dc]) => dr * BOARD_SIZE + dc);
+export const FORWARD_STEPS = new Uint8Array(BOARD_CELLS * 4);
+export const BACKWARD_STEPS = new Uint8Array(BOARD_CELLS * 4);
+export const LINE_OFFSETS = DIRECTIONS.map(([dr, dc]) => dr * BOARD_SIZE + dc);
 for (let pos = 0; pos < BOARD_CELLS; pos++) {
   const row = Math.floor(pos / BOARD_SIZE), col = pos % BOARD_SIZE;
   for (let dir = 0; dir < 4; dir++) {
@@ -76,6 +75,48 @@ function rankFor(count: number, openEnds: number, gaps: number): number {
   }
 
   return 0;
+}
+
+const PATTERN_BY_RANK: readonly (PatternType | null)[] = [
+  null, 'HALF_TWO', 'OPEN_TWO', 'HALF_THREE', 'GAP_THREE',
+  'OPEN_THREE', 'HALF_FOUR', 'GAP_FOUR', 'OPEN_FOUR', 'FIVE',
+] as (PatternType | null)[];
+
+/** Pattern-only scan for move scoring and forks, without allocating LineInfo. */
+export function patternAt(
+  board: Board, pos: CellIndex, dir: number, player: Color, ignoreKo = false
+): PatternType | null {
+  const geometry = pos * 4 + dir;
+  const forward = FORWARD_STEPS[geometry], backward = BACKWARD_STEPS[geometry];
+  if (1 + forward + backward < 5) return null;
+  const offset = LINE_OFFSETS[dir], cells = board.cells;
+  const ko = ignoreKo ? -1 : board.koPosition;
+  let left = 0, right = 0;
+  while (left < backward && left < 6 && cells[pos - (left + 1) * offset] === player) left++;
+  while (right < forward && right < 6 && cells[pos + (right + 1) * offset] === player) right++;
+  const count = left + 1 + right;
+  if (count >= 5) return count === 5 ? PATTERN_BY_RANK[9] : null;
+  const leftEnd = pos - (left + 1) * offset, rightEnd = pos + (right + 1) * offset;
+  const leftOpen = left < backward && cells[leftEnd] === EMPTY && leftEnd !== ko;
+  const rightOpen = right < forward && cells[rightEnd] === EMPTY && rightEnd !== ko;
+  let rank = rankFor(count, Number(leftOpen) + Number(rightOpen), 0);
+  if (rightOpen) {
+    let after = 0;
+    const remaining = forward - right - 1;
+    let end = rightEnd + offset;
+    while (after < remaining && after < 6 && cells[end] === player) { after++; end += offset; }
+    if (after) rank = Math.max(rank, rankFor(count + after,
+      Number(leftOpen) + Number(after < remaining && cells[end] === EMPTY && end !== ko), 1));
+  }
+  if (leftOpen) {
+    let after = 0;
+    const remaining = backward - left - 1;
+    let end = leftEnd - offset;
+    while (after < remaining && after < 6 && cells[end] === player) { after++; end -= offset; }
+    if (after) rank = Math.max(rank, rankFor(count + after,
+      Number(rightOpen) + Number(after < remaining && cells[end] === EMPTY && end !== ko), 1));
+  }
+  return PATTERN_BY_RANK[rank];
 }
 
 /**
@@ -315,11 +356,6 @@ export function countPatterns(board: Board, player: Color): PatternCounts {
       const pattern = classifyLine(info);
       if (pattern === null) continue;
       
-      // Generate key based on line extent
-      const [dRow, dCol] = DIRECTIONS[dir];
-      const row = Math.floor(pos / BOARD_SIZE);
-      const col = pos % BOARD_SIZE;
-
       // Gap lines (e.g., XX_XX) are split into two segments, so use the gap cell as the key.
       // This prevents double-counting from each side of the gap.
       let lineKey: number;
@@ -331,17 +367,8 @@ export function countPatterns(board: Board, player: Color): PatternCounts {
         // Gap-key namespace starts after contiguous line keys.
         lineKey = BOARD_CELLS * 4 + info.gapPos * 4 + dir;
       } else {
-        // Find start of contiguous line
-        let startR = row, startC = col;
-        while (
-          inBounds(startR - dRow, startC - dCol) &&
-          board.cells[toIndex(startR - dRow, startC - dCol)] === player
-        ) {
-          startR -= dRow;
-          startC -= dCol;
-        }
-        const startIdx = toIndex(startR, startC);
-        lineKey = startIdx * 4 + dir;
+        // The loop already excludes every stone after the run's start.
+        lineKey = pos * 4 + dir;
       }
       if (COUNTED_LINES[lineKey] === stamp) continue;
       COUNTED_LINES[lineKey] = stamp;

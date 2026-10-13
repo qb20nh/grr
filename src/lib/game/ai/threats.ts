@@ -3,11 +3,12 @@
  * Identifies urgent tactical situations
  */
 
-import { BOARD_SIZE, BOARD_CELLS, DIRECTIONS, CANDIDATE_NEIGHBORS } from './constants';
-import type { Board, CellIndex, Color, Fork, PatternCounts } from './types';
+import { BOARD_CELLS, CANDIDATE_NEIGHBORS } from './constants';
+import type { Board, CellIndex, Color, Fork, PatternCounts, Move, ReinforceMove, SingleWinMove } from './types';
 import { ThreatLevel, EMPTY } from './types';
-import { getOpponent } from './utils';
-import { countPatterns, scanLine, classifyLine } from './patterns';
+import { getOpponent, createSingleWinMove, createReinforceMove } from './utils';
+import { checkWinAt, checkColinearityConstraint } from './board';
+import { countPatterns, scanLine, classifyLine, patternAt, FORWARD_STEPS, BACKWARD_STEPS, LINE_OFFSETS } from './patterns';
 
 // ---- Blocking mask (scratch) ----
 export interface BlockingMask {
@@ -41,6 +42,8 @@ export function getBlockingMask(board: Board, player: Color, ignoreKo: boolean =
     if (board.cells[pos] !== opponent) continue;
 
     for (let dir = 0; dir < 4; dir++) {
+      // Every stone in a contiguous run has the same gap and extend squares.
+      if (BACKWARD_STEPS[pos * 4 + dir] > 0 && board.cells[pos - LINE_OFFSETS[dir]] === opponent) continue;
       const info = scanLine(board, pos, dir, opponent, ignoreKo);
       const pattern = classifyLine(info);
 
@@ -163,6 +166,22 @@ export function detectForks(board: Board, player: Color): Fork[] {
 
   const candidates = forkCandidates(board);
   for (const pos of candidates) {
+    // Any significant one-gap pattern must have a friendly stone within two
+    // steps of the placement. Fewer than two such directions cannot be a fork.
+    // This cheap necessary condition avoids four full scans on isolated squares.
+    let possibleDirections = 0;
+    for (let dir = 0; dir < 4; dir++) {
+      const geometry = pos * 4 + dir;
+      const offset = LINE_OFFSETS[dir];
+      const forward = FORWARD_STEPS[geometry], backward = BACKWARD_STEPS[geometry];
+      if ((forward >= 1 && board.cells[pos + offset] === player) ||
+          (forward >= 2 && board.cells[pos + offset * 2] === player) ||
+          (backward >= 1 && board.cells[pos - offset] === player) ||
+          (backward >= 2 && board.cells[pos - offset * 2] === player)) {
+        if (++possibleDirections === 2) break;
+      }
+    }
+    if (possibleDirections < 2) continue;
     
     // Temporarily place stone
     board.cells[pos] = player;
@@ -170,8 +189,7 @@ export function detectForks(board: Board, player: Color): Fork[] {
     const threats: string[] = [];
     
     for (let dir = 0; dir < 4; dir++) {
-      const info = scanLine(board, pos, dir, player);
-      const pattern = classifyLine(info);
+      const pattern = patternAt(board, pos, dir, player);
       
       // Count significant threats
       if (pattern === 'FIVE' ||
@@ -244,58 +262,116 @@ export function findWinningPositions(board: Board, player: Color, ignoreKo: bool
  *
  * Scan maximal contiguous runs and combine the counts on either side of an empty
  * endpoint. Pattern labels alone cannot distinguish XXXX_X from a legal exact five.
+ * If `through` is supplied, inspect only runs containing those occupied squares;
+ * callers checking a move must separately preserve threats elsewhere on the board.
  */
 export function getSingleStoneWinningSquares(
   board: Board,
   player: Color,
-  koMode: ThreatKoMode = 'respectKo'
+  koMode: ThreatKoMode = 'respectKo',
+  through?: readonly CellIndex[]
 ): CellIndex[] {
-  const ignoreKo = koMode === 'ignoreKo';
+  const ko = koMode === 'ignoreKo' ? -1 : board.koPosition;
   const stamp = nextWinStamp();
   const out: CellIndex[] = [];
+  const cells = board.cells;
 
-  const addEnd = (row: number, col: number, dr: number, dc: number, count: number): void => {
-    if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) return;
-    const idx = row * BOARD_SIZE + col;
-    if (board.cells[idx] !== EMPTY || (!ignoreKo && board.koPosition === idx)) return;
+  const addEnd = (idx: number, offset: number, remaining: number, count: number): void => {
+    if (count + remaining < 4) return;
+    if (cells[idx] !== EMPTY || ko === idx) return;
     if (WIN_MASK[idx] === stamp) return;
-    row += dr;
-    col += dc;
-    while (row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE &&
-           board.cells[row * BOARD_SIZE + col] === player && count < 5) {
+    let next = idx + offset;
+    while (remaining-- > 0 && cells[next] === player && count < 5) {
       count++;
-      row += dr;
-      col += dc;
+      next += offset;
     }
     if (count !== 4) return;
     WIN_MASK[idx] = stamp;
     out.push(idx);
   };
 
-  for (let pos = 0; pos < BOARD_CELLS; pos++) {
-    if (board.cells[pos] !== player) continue;
-
-    const row = Math.floor(pos / BOARD_SIZE);
-    const col = pos % BOARD_SIZE;
-    for (const [dr, dc] of DIRECTIONS) {
-      const beforeRow = row - dr, beforeCol = col - dc;
-      if (beforeRow >= 0 && beforeRow < BOARD_SIZE && beforeCol >= 0 && beforeCol < BOARD_SIZE &&
-          board.cells[beforeRow * BOARD_SIZE + beforeCol] === player) continue;
-
-      let count = 1, r = row + dr, c = col + dc;
-      while (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE &&
-             board.cells[r * BOARD_SIZE + c] === player && count < 5) {
-        count++;
-        r += dr;
-        c += dc;
+  for (let i = 0; i < (through?.length ?? BOARD_CELLS); i++) {
+    const pos = through ? through[i] : i;
+    if (cells[pos] !== player) continue;
+    for (let dir = 0; dir < 4; dir++) {
+      const geometry = pos * 4 + dir;
+      const backward = BACKWARD_STEPS[geometry];
+      const forward = FORWARD_STEPS[geometry];
+      const offset = LINE_OFFSETS[dir];
+      let left = 0;
+      if (!through && backward > 0 && cells[pos - offset] === player) continue;
+      // A local query starts inside a run. Count each side once instead of
+      // finding its start and then scanning the left half a second time.
+      while (through && left < backward && left < 4 && cells[pos - (left + 1) * offset] === player) {
+        left++;
       }
+
+      let right = 0;
+      while (right < forward && left + right < 4 && cells[pos + (right + 1) * offset] === player) {
+        right++;
+      }
+      const count = left + 1 + right;
       if (count >= 5) continue;
-      addEnd(beforeRow, beforeCol, -dr, -dc, count);
-      addEnd(r, c, dr, dc, count);
+      // With ascending full-board origins and positive direction offsets, any
+      // backward gap win has already been found at the earlier run's forward
+      // end. Only a contiguous four can add a new backward winning square.
+      if (left < backward && (through || count === 4)) {
+        addEnd(pos - (left + 1) * offset, -offset, backward - left - 1, count);
+      }
+      if (right < forward) addEnd(pos + (right + 1) * offset, offset, forward - right - 1, count);
     }
   }
 
   return out;
+}
+
+/** Check an attack after makeMove, before scoring clears, using changed lines.
+ * Previous winning squares must be supplied from the parent with Ko ignored.
+ */
+export function hasImmediateThreatAfterMove(
+  board: Board, player: Color, move: Move, previousWinningSquares: readonly CellIndex[]
+): boolean {
+  // Existing threats may survive the move, including a square whose old Ko expired.
+  for (const pos of previousWinningSquares) {
+    if (board.cells[pos] === EMPTY && checkWinAt(board, pos, player)) return true;
+  }
+  // Removing an enemy stone can only create a new winning square at that cell.
+  if (move.action === 'rift') return checkWinAt(board, move.pos, player);
+  const placed = move.pos2 === null ? [move.pos1] : [move.pos1, move.pos2];
+  return getSingleStoneWinningSquares(board, player, 'ignoreKo', placed).length > 0;
+}
+
+/** Exact match-ending placement, including intersecting lines and scoring pairs. */
+export function getImmediateMatchWinningMove(
+  board: Board, player: Color, pointsNeeded: number, koMode: ThreatKoMode = 'respectKo'
+): ReinforceMove | SingleWinMove | null {
+  // Each of two legal stones can complete at most four distinct lines.
+  if (pointsNeeded > 8) return null;
+  const squares = getSingleStoneWinningSquares(board, player, koMode);
+  if (squares.length === 0) return null;
+  if (pointsNeeded <= 1) return createSingleWinMove(squares[0]);
+  const points = squares.map(pos => {
+    let count = 0;
+    for (let dir = 0; dir < 4; dir++) {
+      const geometry = pos * 4 + dir, offset = LINE_OFFSETS[dir];
+      let length = 1;
+      for (let step = 1; step <= FORWARD_STEPS[geometry] && board.cells[pos + step * offset] === player; step++) length++;
+      for (let step = 1; step <= BACKWARD_STEPS[geometry] && board.cells[pos - step * offset] === player; step++) length++;
+      if (length === 5) count++;
+    }
+    return count;
+  });
+  for (let i = 0; i < squares.length; i++) {
+    if (points[i] >= pointsNeeded) return createSingleWinMove(squares[i]);
+  }
+  // The collinearity rule keeps legal pair placements' scoring lines independent.
+  for (let i = 0; i < squares.length; i++) for (let j = i + 1; j < squares.length; j++) {
+    if (points[i] + points[j] >= pointsNeeded &&
+        checkColinearityConstraint(board, squares[i], squares[j], player)) {
+      return createReinforceMove(squares[i], squares[j]);
+    }
+  }
+  return null;
 }
 
 // ---- winning-square de-dup stamp ----
@@ -357,8 +433,7 @@ export function riftBreaksThreat(
   
   for (let dir = 0; dir < 4; dir++) {
     // Ko is only temporary; threats that are Ko-blocked right now may be real next turn.
-    const info = scanLine(board, riftPos, dir, opponent, true);
-    const pattern = classifyLine(info);
+    const pattern = patternAt(board, riftPos, dir, opponent, true);
     
     if (pattern === 'FIVE' ||
         pattern === 'OPEN_FOUR' ||
@@ -388,8 +463,7 @@ export function evaluateRiftTarget(
   for (let dir = 0; dir < 4; dir++) {
     // Ko is only temporary; evaluate the threats this stone contributes to assuming
     // Ko will not block the opponent on their next move.
-    const info = scanLine(board, riftPos, dir, opponent, true);
-    const pattern = classifyLine(info);
+    const pattern = patternAt(board, riftPos, dir, opponent, true);
     
     // Score based on what pattern we're breaking
     switch (pattern) {

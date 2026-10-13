@@ -41,7 +41,7 @@ export const CONFIG = {
   // Search parameters
   MAX_DEPTH: 20,              // Maximum search depth
   KILLER_SLOTS: 2,            // Killer moves per depth
-  QUIESCENCE_DEPTH: 4,        // Max forcing continuations beyond the main search
+  QUIESCENCE_DEPTH: 4,        // Ceiling for forcing continuations beyond the main search
 
   // Null-move pruning (NMP)
   // Conservative defaults; always disabled under tactical danger inside the search.
