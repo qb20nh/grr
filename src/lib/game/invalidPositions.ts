@@ -5,7 +5,7 @@ import {
   isLongProRestrictedBlackSecondMove,
   isOutsideLongProCenterRegion,
 } from './openingRules';
-import { checkColinearityConstraint } from './validator';
+import { validateReinforceAction } from './validator';
 
 export type InvalidPositionsState = Pick<
   GameState,
@@ -13,7 +13,7 @@ export type InvalidPositionsState = Pick<
 >;
 
 /**
- * Compute "invalid" intersections for UI affordances (opening constraints, colinearity).
+ * Compute "invalid" intersections for opening constraints and reinforce legality.
  *
  * This is intentionally pure and phase-agnostic so it can be reused in replay mode.
  */
@@ -48,7 +48,7 @@ export function computeInvalidPositions(state: InvalidPositionsState): Set<strin
     }
   }
 
-  // When we have one pending placement, mark colinearity-invalid positions
+  // With one pending stone, exclude illegal pairs, including scoring pairs.
   if (state.pendingPlacements.length === 1) {
     const firstPos = state.pendingPlacements[0];
     if (firstPos) {
@@ -60,7 +60,7 @@ export function computeInvalidPositions(state: InvalidPositionsState): Set<strin
             !positionsEqual(pos, state.lastRiftedPosition) &&
             !positionsEqual(pos, firstPos)
           ) {
-            if (!checkColinearityConstraint(state.board, firstPos, pos, state.currentPlayer)) {
+            if (!validateReinforceAction(state.board, [firstPos, pos], state.currentPlayer, state.lastRiftedPosition).valid) {
               invalid.add(`${row},${col}`);
             }
           }

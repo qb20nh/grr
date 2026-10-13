@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Worker } from 'node:worker_threads';
 import { once } from 'node:events';
-import { boardFrom2D, makeMove, checkWinAt, validateReinforce, validateRift } from '../src/lib/game/ai/board.ts';
+import { boardFrom2D, cloneBoard, makeMove, checkWinAt, validateReinforce, validateRift, applyScoringAndClear } from '../src/lib/game/ai/board.ts';
 
 // Exercise the actual application worker through its message boundary. Node only
 // supplies postMessage/self; this does not replace a browser integration test.
@@ -27,6 +27,12 @@ test('application worker returns legal moves for opening, scoring and ko states'
       { stones: [[1,7,3],[1,7,4],[1,7,5],[1,7,6],[1,7,8]], color: 1 },
       { stones: [[2,7,0],[2,7,1],[2,7,2],[2,7,3],[1,5,5],[1,9,9]], color: 1, ko: {row:7,col:4} },
       { stones: [[1,7,3],[1,7,4],[1,7,5],[1,7,6],[2,2,2]], color: 1, target: 3 },
+      // One stone can complete two crossing lines and reach a multi-point target.
+      { stones: [[1,7,5],[1,7,6],[1,7,8],[1,7,9],
+        [1,5,7],[1,6,7],[1,8,7],[1,9,7],[2,2,2]], color: 1, target: 2, expectedPoints: 2 },
+      // Two separate fours must not become a two-point, two-stone action.
+      { stones: [[2,3,0],[2,3,1],[2,3,2],[2,3,3],
+        [2,9,10],[2,9,11],[2,9,12],[2,9,13],[1,7,7]], color: 2, target: 2 },
       // Even a mate-coded selective search must return a legal move, not resign.
       { stones: [[2,5,3],[2,5,4],[2,5,5],[2,5,6],
         [2,9,3],[2,9,4],[2,9,5],[2,9,6],[1,7,7]], color: 1 },
@@ -48,6 +54,15 @@ test('application worker returns legal moves for opening, scoring and ko states'
       const { action, positions } = result.move;
       const b = boardFrom2D(grid, f.ko ? f.ko.row * 15 + f.ko.col : null);
       const indices = positions.map(p => p.row * 15 + p.col);
+      if (action === 'reinforce' && f.index !== 0) {
+        const scored = cloneBoard(b);
+        const move = { action, pos1: indices[0], pos2: indices[1] ?? null };
+        makeMove(scored, move, f.color);
+        const scoring = applyScoringAndClear(scored, move, f.color);
+        if (scoring.points > 0) assert.equal(indices.length, 1, 'a scoring reinforce must place exactly one stone');
+        if (f.expectedPoints !== undefined) assert.equal(scoring.points, f.expectedPoints, JSON.stringify(result));
+      }
+      if (f.expectedPoints !== undefined) assert.equal(action, 'reinforce');
       if (f.index === 0) assert.deepEqual(indices, [112]);
       else if (action === 'rift') assert.equal(validateRift(b, indices[0], f.color), true);
       else if (indices.length === 2) assert.equal(validateReinforce(b, indices[0], indices[1], f.color), true);

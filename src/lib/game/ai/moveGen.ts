@@ -111,24 +111,19 @@ function generateMultiPointResponses(board: Board, player: Color, match: MatchCo
 
   const responses: ScoredMove[] = [];
   const scorer = firstOnly ? null : createReinforceScorer(board, player, getBlockingMask(board, player));
-  const seen = new Set<number>();
-  // A non-scoring placement must occupy at least one square of this winning
-  // move. Enumerate every legal filler, then check all remaining winning moves.
-  for (const a of threat.pos2 === null ? [threat.pos1] : [threat.pos1, threat.pos2]) {
-    for (let b = 0; b < BOARD_CELLS; b++) {
-      if (!validateReinforce(board, a, b, player)) continue;
-      const key = pairKey(a, b);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const move = createReinforceMove(a, b);
-      const undo = makeMove(board, move, player);
-      const safe = getImmediateMatchWinningMove(board, opponent, match.scoreToWin - opponentScore) === null;
-      unmakeMove(board, undo, player);
-      if (!safe) continue;
-      const score = scorer?.pair(a, b) ?? 0;
-      responses.push({move, score, orderScore:score});
-      if (firstOnly) return responses;
-    }
+  // A non-scoring placement must occupy this winning square. Enumerate every
+  // legal filler, then check all remaining winning moves.
+  const a = threat.pos1;
+  for (let b = 0; b < BOARD_CELLS; b++) {
+    if (!validateReinforce(board, a, b, player)) continue;
+    const move = createReinforceMove(a, b);
+    const undo = makeMove(board, move, player);
+    const safe = getImmediateMatchWinningMove(board, opponent, match.scoreToWin - opponentScore) === null;
+    unmakeMove(board, undo, player);
+    if (!safe) continue;
+    const score = scorer?.pair(a, b) ?? 0;
+    responses.push({move, score, orderScore:score});
+    if (firstOnly) return responses;
   }
   for (let pos = 0; pos < BOARD_CELLS; pos++) {
     if (board.cells[pos] !== opponent) continue;
@@ -300,7 +295,11 @@ function generateReinforceMovesWithWins(
 
   const scorer = createReinforceScorer(board, player, blocking);
   const candidates = getCandidatePositions(board);
-  const scoredCandidates = candidates.map(pos => ({ pos, score: scorer.single(pos) }));
+  const scoredCandidates: { pos: CellIndex; score: number }[] = [];
+  for (const pos of candidates) {
+    // Scoring squares are emitted as singles below, never with a filler stone.
+    if (!scoringPositions.includes(pos)) scoredCandidates.push({ pos, score: scorer.single(pos) });
+  }
   scoredCandidates.sort((a, b) => b.score - a.score);
   
   // Take top candidates for pair generation
@@ -339,6 +338,7 @@ function generateReinforceMovesWithWins(
   const cStamp = nextCriticalBlockStamp();
   const criticalBlockArray: CellIndex[] = [];
   const addCritical = (pos: CellIndex): void => {
+    if (scoringPositions.includes(pos)) return;
     if (CRITICAL_BLOCK_SEEN[pos] === cStamp) return;
     CRITICAL_BLOCK_SEEN[pos] = cStamp;
     criticalBlockArray.push(pos);
@@ -605,7 +605,7 @@ export function generateBlockingMoves(
       const pos2 = blockArray[j];
       
       if (!isValidPlacement(board, pos1) || !isValidPlacement(board, pos2)) continue;
-      if (!checkColinearityConstraint(board, pos1, pos2, player)) continue;
+      if (!validateReinforce(board, pos1, pos2, player)) continue;
       
       const score = evaluateReinforceMove(board, pos1, pos2, player, blocking);
       moves.push({
@@ -624,7 +624,7 @@ export function generateBlockingMoves(
     
     for (const cand of scoredCandidates.slice(0, 15)) {
       if (cand.pos === blockPos) continue;
-      if (!checkColinearityConstraint(board, blockPos, cand.pos, player)) continue;
+      if (!validateReinforce(board, blockPos, cand.pos, player)) continue;
       
       const score = evaluateReinforceMove(board, blockPos, cand.pos, player, blocking);
       moves.push({

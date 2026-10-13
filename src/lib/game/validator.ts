@@ -121,17 +121,13 @@ export function wouldScoreWithSingleStone(
     return false;
   }
   
-  // Temporarily place the stone
-  const tempBoard = board.map(row => [...row]);
-  tempBoard[pos.row][pos.col] = player;
-  
-  // Check if this creates exactly 5 in a row
-  return checkWinAtPosition(tempBoard, pos, player);
+  // The checker counts the hypothetical stone at pos without reading that cell.
+  return checkWinAtPosition(board, pos, player);
 }
 
 /**
  * Validates a complete reinforce action (placing one or two stones).
- * Single stone placement is only allowed if it immediately scores.
+ * Scoring moves must place exactly one stone; non-scoring moves must place two.
  */
 export function validateReinforceAction(
   board: Stone[][],
@@ -180,6 +176,15 @@ export function validateReinforceAction(
       valid: false, 
       reason: 'Stones cannot be placed on the same line unless an opponent stone is between them' 
     };
+  }
+
+  // Legal pairs cannot extend the same unbroken line: they are either not
+  // colinear or separated by an opponent. Check each placement independently.
+  if (
+    wouldScoreWithSingleStone(board, pos1, currentPlayer) ||
+    wouldScoreWithSingleStone(board, pos2, currentPlayer)
+  ) {
+    return { valid: false, reason: 'Scoring moves must place exactly one stone' };
   }
 
   return { valid: true };
